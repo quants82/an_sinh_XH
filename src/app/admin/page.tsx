@@ -115,6 +115,23 @@ export default function AdminPage() {
 
   useEffect(() => {
     loadAll();
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const driveStatus = sp.get("drive");
+      const driveMsg = sp.get("msg");
+      if (driveStatus) {
+        setTab("drive");
+        if (driveStatus === "connected") {
+          setMsg("Đã kết nối Google Drive thành công và tạo xong thư mục lưu trữ.");
+        } else if (driveStatus === "cancelled") {
+          setErr(driveMsg || "Bạn đã hủy xác thực Google Drive.");
+        } else if (driveStatus === "error_state") {
+          setErr("Phiên xác thực Drive không hợp lệ (hãy thử bấm kết nối lại).");
+        } else if (driveStatus === "error") {
+          setErr(`Lỗi kết nối Google Drive: ${driveMsg || "Không xác định"}`);
+        }
+      }
+    }
   }, [loadAll]);
 
   async function handleAddUser(e: React.FormEvent) {

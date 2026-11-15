@@ -33,7 +33,12 @@ export async function GET(req: Request) {
 
   if (errorParam || !code) {
     return NextResponse.redirect(
-      new URL(`${returnTo}?drive=cancelled`, url.origin)
+      new URL(
+        `${returnTo}?drive=${errorParam ? "error" : "cancelled"}&msg=${encodeURIComponent(
+          errorParam || "Bạn đã hủy cấp quyền Google Drive"
+        )}`,
+        url.origin
+      )
     );
   }
 
