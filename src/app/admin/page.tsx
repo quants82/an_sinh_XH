@@ -11,6 +11,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
+  Download,
+  Upload,
+  Plus,
 } from "lucide-react";
 import { ROLE_LABELS, type UserRole } from "@/lib/constants";
 
@@ -82,6 +85,10 @@ export default function AdminPage() {
   const [demoteRole, setDemoteRole] = useState<"LEADER" | "DEPT_HEAD" | "AUDITOR">("LEADER");
   const [disconnectDrive, setDisconnectDrive] = useState(false);
   const [transferReason, setTransferReason] = useState("");
+  const [newGroupCode, setNewGroupCode] = useState("");
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupScore, setNewGroupScore] = useState(5);
+  const [showReserveVillages, setShowReserveVillages] = useState(false);
 
   const loadAll = useCallback(() => {
     fetch("/api/users")
@@ -190,6 +197,7 @@ export default function AdminPage() {
     e.preventDefault();
     if (!settings) return;
     setMsg("");
+    setErr("");
     const res = await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -198,6 +206,7 @@ export default function AdminPage() {
         villageUpdates: villages,
         groupUpdates: groups.map((g) => ({
           id: g.id,
+          name: g.name,
           baseScore: g.baseScore,
           isActive: g.isActive,
           defaultDurationMonths: g.defaultDurationMonths,
@@ -205,7 +214,67 @@ export default function AdminPage() {
       }),
     });
     if (res.ok) {
-      setMsg("Đã lưu cấu hình quy tắc chấm điểm & danh mục.");
+      setMsg(
+        "Đã lưu Bảng điểm quy định & Danh mục thôn. Điểm mới tự động áp dụng cho toàn bộ đối tượng thuộc nhóm tương ứng."
+      );
+      loadAll();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      setErr(d.error || "Không lưu được cấu hình");
+    }
+  }
+
+  async function handleImportScoringExcel(
+    e: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setMsg("");
+    setErr("");
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/settings/scoring-excel", {
+      method: "POST",
+      body: fd,
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setErr(d.error || "Import Bảng điểm thất bại");
+    } else {
+      setMsg(
+        `Đã nhập riêng Bảng điểm Lãnh đạo: cập nhật ${d.updatedCount} nhóm, thêm mới ${d.createdCount} nhóm. Điểm đã tự động áp dụng cho toàn bộ đối tượng!`
+      );
+      loadAll();
+    }
+    e.target.value = "";
+  }
+
+  async function handleAddNewGroup() {
+    if (!newGroupCode.trim() || !newGroupName.trim()) {
+      setErr("Vui lòng nhập đủ Mã nhóm và Tên nhóm mới.");
+      return;
+    }
+    setMsg("");
+    setErr("");
+    const res = await fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        newGroup: {
+          code: newGroupCode,
+          name: newGroupName,
+          baseScore: Number(newGroupScore) || 5,
+        },
+      }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setErr(d.error || "Không thêm được nhóm mới");
+    } else {
+      setNewGroupCode("");
+      setNewGroupName("");
+      setNewGroupScore(5);
+      setMsg("Đã thêm nhóm đối tượng mới vào Bảng điểm.");
       loadAll();
     }
   }
@@ -698,16 +767,43 @@ export default function AdminPage() {
             </div>
 
             <div>
-              <h3 className="mb-2 text-sm font-bold text-slate-900">
-                Bảng điểm nền theo Nhóm đối tượng
-              </h3>
+              <div className="mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Bảng điểm quy định theo Nhóm đối tượng (Lãnh đạo ban hành)
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Có thể chỉnh trực tiếp bên dưới hoặc nhập riêng từ tệp Excel Bảng điểm. Hệ thống tự động gán &amp; cập nhật điểm cho toàn bộ đối tượng thuộc nhóm.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href="/api/settings/scoring-excel"
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Tải Excel Bảng điểm</span>
+                  </a>
+                  <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-blue-700 bg-blue-50 px-3 py-1.5 font-semibold text-blue-900 hover:bg-blue-100">
+                    <Upload className="h-3.5 w-3.5" />
+                    <span>Nhập riêng Bảng điểm (.xlsx)</span>
+                    <input
+                      type="file"
+                      accept=".xlsx"
+                      className="hidden"
+                      onChange={handleImportScoringExcel}
+                    />
+                  </label>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {groups.map((g, idx) => (
                   <div
                     key={g.id}
                     className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2"
                   >
-                    <label className="flex items-center gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
                       <input
                         type="checkbox"
                         checked={g.isActive}
@@ -717,11 +813,23 @@ export default function AdminPage() {
                           setGroups(next);
                         }}
                       />
-                      <span>{g.name}</span>
-                    </label>
+                      <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-600">
+                        {g.code}
+                      </span>
+                      <input
+                        type="text"
+                        value={g.name}
+                        onChange={(e) => {
+                          const next = [...groups];
+                          next[idx] = { ...g, name: e.target.value };
+                          setGroups(next);
+                        }}
+                        className="min-w-0 flex-1 rounded border border-transparent px-1 py-0.5 hover:border-slate-200 focus:border-blue-400 focus:outline-none"
+                      />
+                    </div>
                     <input
                       type="number"
-                      className="w-16 rounded border border-slate-300 px-2 py-1 text-center font-bold"
+                      className="w-16 shrink-0 rounded border border-slate-300 px-2 py-1 text-center font-bold"
                       value={g.baseScore}
                       onChange={(e) => {
                         const next = [...groups];
@@ -732,33 +840,95 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+
+              {/* Thêm nhóm mới */}
+              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-2.5">
+                <input
+                  type="text"
+                  placeholder="Mã nhóm (vd: HO_DAC_BIET)"
+                  value={newGroupCode}
+                  onChange={(e) => setNewGroupCode(e.target.value)}
+                  className="w-44 rounded border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs"
+                />
+                <input
+                  type="text"
+                  placeholder="Tên nhóm đối tượng mới..."
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  className="min-w-52 flex-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                />
+                <input
+                  type="number"
+                  placeholder="Điểm"
+                  value={newGroupScore}
+                  onChange={(e) => setNewGroupScore(Number(e.target.value))}
+                  className="w-20 rounded border border-slate-300 bg-white px-2 py-1.5 text-center font-bold"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddNewGroup}
+                  className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 font-semibold text-white hover:bg-slate-900"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Thêm nhóm
+                </button>
+              </div>
             </div>
 
             <div>
-              <h3 className="mb-2 text-sm font-bold text-slate-900">
-                Danh mục Thôn (Mã cố định không đổi khi sáp nhập/đổi tên)
-              </h3>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {villages.map((v, idx) => (
-                  <div
-                    key={v.id}
-                    className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5"
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900">
+                  Danh mục Thôn (Mã cố định không đổi khi sáp nhập/đổi tên)
+                </h3>
+                {villages.some((v) => !v.isActive) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowReserveVillages(!showReserveVillages)}
+                    className="font-semibold text-blue-700 hover:underline"
                   >
-                    <span className="font-mono font-bold text-blue-800">
-                      {v.code}
-                    </span>
-                    <input
-                      type="text"
-                      value={v.name}
-                      onChange={(e) => {
-                        const next = [...villages];
-                        next[idx] = { ...v, name: e.target.value };
-                        setVillages(next);
-                      }}
-                      className="flex-1 rounded border border-slate-200 px-2 py-1"
-                    />
-                  </div>
-                ))}
+                    {showReserveVillages
+                      ? "Ẩn mã thôn dự phòng"
+                      : `Hiện ${villages.filter((v) => !v.isActive).length} mã thôn dự phòng`}
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {villages.map((v, idx) => {
+                  if (!v.isActive && !showReserveVillages) return null;
+                  return (
+                    <div
+                      key={v.id}
+                      className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
+                        v.isActive
+                          ? "border-slate-200 bg-white"
+                          : "border-dashed border-slate-200 bg-slate-50 opacity-75"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={v.isActive}
+                        title="Bật/tắt thôn hoạt động"
+                        onChange={(e) => {
+                          const next = [...villages];
+                          next[idx] = { ...v, isActive: e.target.checked };
+                          setVillages(next);
+                        }}
+                      />
+                      <span className="font-mono font-bold text-blue-800">
+                        {v.code}
+                      </span>
+                      <input
+                        type="text"
+                        value={v.name}
+                        onChange={(e) => {
+                          const next = [...villages];
+                          next[idx] = { ...v, name: e.target.value };
+                          setVillages(next);
+                        }}
+                        className="flex-1 rounded border border-slate-200 px-2 py-1"
+                      />
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

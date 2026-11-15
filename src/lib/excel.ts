@@ -3,6 +3,7 @@ import {
   CITIZEN_STATUS_LABELS,
   SUPPORT_TIER_LABELS,
 } from "./constants";
+import { extractCellText } from "./commune-import";
 
 export interface ProgramInternalExportRow {
   stt: number;
@@ -394,6 +395,270 @@ export async function buildCitizenTemplateWorkbook(): Promise<Buffer> {
     "",
   ]);
   ws.columns = Array.from({ length: 10 }, () => ({ width: 24 }));
+  const arrBuf = await wb.xlsx.writeBuffer();
+  return Buffer.from(arrBuf);
+}
+
+export interface ScoringRuleExcelRow {
+  code: string;
+  name: string;
+  baseScore: number;
+  isActive: boolean;
+  defaultDurationMonths: number | null;
+}
+
+/**
+ * Tạo tệp Excel Bảng điểm quy định riêng của Lãnh đạo (hỗ trợ tải về, duyệt/chỉnh sửa và nhập lại).
+ */
+export async function buildScoringRulesWorkbook(
+  groups: ScoringRuleExcelRow[]
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Hệ thống An sinh Xã hội số";
+  const ws = wb.addWorksheet("Bang_Diem_Lanh_Dao");
+
+  ws.mergeCells("A1:F1");
+  ws.getCell("A1").value =
+    "BẢNG ĐIỂM QUY ĐỊNH THEO NHÓM ĐỐI TƯỢNG (DO LÃNH ĐẠO BAN HÀNH)";
+  ws.getCell("A1").font = { bold: true, size: 13 };
+  ws.getCell("A1").alignment = { horizontal: "center" };
+
+  ws.mergeCells("A2:F2");
+  ws.getCell("A2").value =
+    "Hướng dẫn: Sửa cột Điểm quy định và Trạng thái (AP_DUNG hoặc TAM_NGUNG). Không đổi Mã nhóm đối với nhóm có sẵn; có thể thêm dòng mới ở cuối.";
+  ws.getCell("A2").font = { italic: true, size: 10 };
+
+  const header = ws.addRow([
+    "STT",
+    "Mã nhóm đối tượng (*)",
+    "Tên nhóm đối tượng (*)",
+    "Điểm quy định (*)",
+    "Trạng thái (AP_DUNG/TAM_NGUNG)",
+    "Thời hạn tạm (tháng, bỏ trống nếu lâu dài)",
+  ]);
+  header.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1E3A8A" },
+    };
+    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  });
+
+  groups.forEach((g, idx) => {
+    const row = ws.addRow([
+      idx + 1,
+      g.code,
+      g.name,
+      g.baseScore,
+      g.isActive ? "AP_DUNG" : "TAM_NGUNG",
+      g.defaultDurationMonths ?? "",
+    ]);
+    row.getCell(1).alignment = { horizontal: "center" };
+    row.getCell(4).alignment = { horizontal: "center" };
+    row.getCell(5).alignment = { horizontal: "center" };
+    row.getCell(6).alignment = { horizontal: "center" };
+  });
+
+  ws.columns = [
+    { width: 8 },
+    { width: 24 },
+    { width: 48 },
+    { width: 18 },
+    { width: 26 },
+    { width: 22 },
+  ];
+
+  const arrBuf = await wb.xlsx.writeBuffer();
+  return Buffer.from(arrBuf);
+}
+
+/**
+ * Đọc tệp Excel Bảng điểm quy định do Lãnh đạo nhập riêng.
+ */
+export async function parseScoringRulesWorkbook(
+  buffer: ArrayBuffer | Buffer
+): Promise<ScoringRuleExcelRow[]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as ArrayBuffer);
+  const ws = wb.worksheets[0];
+  if (!ws) throw new Error("File Excel Bảng điểm trống");
+
+  // Tự tìm dòng tiêu đề có "Mã nhóm"
+  let startRow = 2;
+  let colMap = { code: 2, name: 3, score: 4, active: 5, duration: 6 };
+  for (let r = 1; r <= Math.min(10, ws.rowCount); r++) {
+    const row = ws.getRow(r);
+    const cells = [1, 2, 3, 4, 5, 6].map((c) => extractCellText(row.getCell(c).value));
+    const codeIdx = cells.findIndex((c) => /^mã nhóm/i.test(c));
+    const scoreIdx = cells.findIndex((c) => /^điểm/i.test(c));
+    if (codeIdx >= 0 && scoreIdx >= 0 && codeIdx !== scoreIdx) {
+      startRow = r + 1;
+      const nameIdx = cells.findIndex((c) => /^tên nhóm/i.test(c));
+      const activeIdx = cells.findIndex((c) => /^trạng thái/i.test(c));
+      const durIdx = cells.findIndex((c) => /^thời hạn/i.test(c));
+      colMap = {
+        code: codeIdx + 1,
+        name: nameIdx >= 0 ? nameIdx + 1 : codeIdx + 2,
+        score: scoreIdx + 1,
+        active: activeIdx >= 0 ? activeIdx + 1 : codeIdx + 4,
+        duration: durIdx >= 0 ? durIdx + 1 : codeIdx + 5,
+      };
+      break;
+    }
+  }
+
+  const parsed: ScoringRuleExcelRow[] = [];
+  for (let r = startRow; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const code = extractCellText(row.getCell(colMap.code).value).toUpperCase();
+    const name = extractCellText(row.getCell(colMap.name).value);
+    if (!code || !name) continue;
+
+    const scoreRaw = extractCellText(row.getCell(colMap.score).value);
+    const scoreNum = Number(scoreRaw.replace(",", "."));
+    if (!Number.isFinite(scoreNum) || scoreNum < 0 || scoreNum > 100) {
+      throw new Error(`Dòng ${r}: Điểm quy định '${scoreRaw}' không hợp lệ (0–100)`);
+    }
+
+    const activeRaw = extractCellText(row.getCell(colMap.active).value).toUpperCase();
+    const isActive = !(
+      activeRaw.includes("NGUNG") ||
+      activeRaw === "FALSE" ||
+      activeRaw === "0" ||
+      activeRaw === "NO"
+    );
+
+    const durRaw = extractCellText(row.getCell(colMap.duration).value);
+    const durNum = durRaw ? Number(durRaw) : NaN;
+
+    parsed.push({
+      code,
+      name,
+      baseScore: Math.round(scoreNum),
+      isActive,
+      defaultDurationMonths:
+        Number.isFinite(durNum) && durNum > 0 ? Math.round(durNum) : null,
+    });
+  }
+
+  if (parsed.length === 0) {
+    throw new Error("Không tìm thấy dòng nhóm đối tượng hợp lệ trong file Excel Bảng điểm");
+  }
+  return parsed;
+}
+
+export interface FilteredCitizenExportRow {
+  citizenCode: string;
+  fullName: string;
+  birthYear: number;
+  villageName: string;
+  groupsText: string;
+  baseScore: number;
+  localBonusScore: number;
+  estimatedScore: number;
+  status: string;
+  hardshipSummary: string;
+}
+
+/**
+ * Xuất Excel Thống kê & Danh sách đối tượng theo bộ lọc hiện tại.
+ */
+export async function buildFilteredCitizensWorkbook(params: {
+  communeName: string;
+  filterDescription: string;
+  rows: FilteredCitizenExportRow[];
+  byVillage: Array<{ villageName: string; active: number; ended: number; total: number }>;
+  byGroup: Array<{ groupName: string; baseScore: number; total: number }>;
+}): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Hệ thống An sinh Xã hội số";
+
+  // Sheet 1: Thống kê tổng hợp
+  const wsSum = wb.addWorksheet("ThongKe_TongHop");
+  wsSum.addRow([
+    `${params.communeName.toUpperCase()} — BÁO CÁO THỐNG KÊ ĐỐI TƯỢNG AN SINH`,
+  ]).font = { bold: true, size: 13 };
+  wsSum.addRow([
+    `Bộ lọc: ${params.filterDescription} | Tổng số hồ sơ: ${params.rows.length}`,
+  ]);
+  wsSum.addRow([]);
+
+  wsSum.addRow(["I. THỐNG KÊ THEO THÔN"]).font = { bold: true };
+  wsSum.addRow(["STT", "Thôn", "Đang hoạt động / Rà soát", "Đã giảm / Tạm dừng", "Tổng cộng"]).font = {
+    bold: true,
+  };
+  params.byVillage.forEach((v, idx) => {
+    wsSum.addRow([idx + 1, v.villageName, v.active, v.ended, v.total]);
+  });
+
+  wsSum.addRow([]);
+  wsSum.addRow(["II. THỐNG KÊ THEO NHÓM ĐỐI TƯỢNG & BẢNG ĐIỂM"]).font = { bold: true };
+  wsSum.addRow(["STT", "Nhóm đối tượng", "Điểm quy định", "Số lượt đối tượng"]).font = {
+    bold: true,
+  };
+  params.byGroup.forEach((g, idx) => {
+    wsSum.addRow([idx + 1, g.groupName, g.baseScore, g.total]);
+  });
+  wsSum.columns = [
+    { width: 8 },
+    { width: 42 },
+    { width: 24 },
+    { width: 22 },
+    { width: 16 },
+  ];
+
+  // Sheet 2: Danh sách đối tượng chi tiết
+  const wsList = wb.addWorksheet("DanhSach_DoiTuong");
+  const hdr = wsList.addRow([
+    "STT",
+    "Mã công dân",
+    "Họ và tên",
+    "Năm sinh",
+    "Thôn",
+    "Nhóm đối tượng",
+    "Điểm nhóm",
+    "Điểm cộng",
+    "Tổng điểm",
+    "Trạng thái",
+    "Chi tiết / Số sổ / Ghi chú",
+  ]);
+  hdr.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  hdr.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A8A" } };
+  });
+
+  params.rows.forEach((r, idx) => {
+    wsList.addRow([
+      idx + 1,
+      r.citizenCode,
+      r.fullName,
+      r.birthYear,
+      r.villageName,
+      r.groupsText,
+      r.baseScore,
+      r.localBonusScore,
+      r.estimatedScore,
+      CITIZEN_STATUS_LABELS[r.status] ?? r.status,
+      r.hardshipSummary,
+    ]);
+  });
+
+  wsList.columns = [
+    { width: 7 },
+    { width: 16 },
+    { width: 26 },
+    { width: 10 },
+    { width: 16 },
+    { width: 34 },
+    { width: 12 },
+    { width: 12 },
+    { width: 12 },
+    { width: 18 },
+    { width: 42 },
+  ];
+
   const arrBuf = await wb.xlsx.writeBuffer();
   return Buffer.from(arrBuf);
 }

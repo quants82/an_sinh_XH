@@ -118,6 +118,31 @@ export default function CitizensPage() {
 
   // Import Excel
   const [importMsg, setImportMsg] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [dragOverImport, setDragOverImport] = useState(false);
+  const [skipReducedPaused, setSkipReducedPaused] = useState(false);
+  const [attachGroupOnDuplicate, setAttachGroupOnDuplicate] = useState(true);
+  const [allowIncompleteDob, setAllowIncompleteDob] = useState(true);
+  const [fallbackVillageId, setFallbackVillageId] = useState<number>(0);
+  const [importPreview, setImportPreview] = useState<{
+    format: string;
+    totalRowsRead: number;
+    willInsertCount: number;
+    willMergeGroupCount: number;
+    reviewFlaggedCount: number;
+    skippedTotal: number;
+    bySheet: Array<{ sheetName: string; count: number }>;
+    byGroup: Array<{
+      groupCode: string;
+      groupName: string;
+      rawSection?: string;
+      baseScore: number;
+      count: number;
+    }>;
+    byVillage: Array<{ villageName: string; count: number }>;
+    sampleWarnings: Array<{ sheet: string; row: number; name: string; reason: string }>;
+  } | null>(null);
 
   const loadMeta = useCallback(() => {
     fetch("/api/settings")
@@ -281,28 +306,72 @@ export default function CitizensPage() {
     }
   }
 
-  async function handleExcelImport(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImportMsg("Đang nhập dữ liệu từ Excel...");
+  async function runImportRequest(
+    file: File,
+    mode: "preview" | "commit",
+    opts?: {
+      skipReducedPaused?: boolean;
+      attachGroupOnDuplicate?: boolean;
+      allowIncompleteDob?: boolean;
+      fallbackVillageId?: number;
+    }
+  ) {
+    setImportLoading(true);
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch("/api/citizens/import", { method: "POST", body: fd });
-    const data = await res.json();
-    if (!res.ok) {
-      setImportMsg(data.error || "Import lỗi");
-    } else {
-      setImportMsg(
-        `Đã nhập ${data.importedCount} hồ sơ.${
-          data.skippedRows?.length
-            ? ` Bỏ qua ${data.skippedRows.length} dòng (dòng ${data.skippedRows
-                .map((s: { row: number; reason: string }) => `${s.row}: ${s.reason}`)
-                .join("; ")}).`
-            : ""
-        }`
-      );
-      loadCitizens();
+    fd.append("mode", mode);
+    fd.append(
+      "skipReducedPaused",
+      String(opts?.skipReducedPaused ?? skipReducedPaused)
+    );
+    fd.append(
+      "attachGroupOnDuplicate",
+      String(opts?.attachGroupOnDuplicate ?? attachGroupOnDuplicate)
+    );
+    fd.append(
+      "allowIncompleteDob",
+      String(opts?.allowIncompleteDob ?? allowIncompleteDob)
+    );
+    fd.append(
+      "fallbackVillageId",
+      String(opts?.fallbackVillageId ?? fallbackVillageId)
+    );
+    try {
+      const res = await fetch("/api/citizens/import", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        setImportMsg(data.error || "Import lỗi");
+        if (mode === "preview") setImportFile(null);
+      } else if (mode === "preview") {
+        setImportPreview(data);
+      } else {
+        setImportMsg(
+          `Đã nhập mới ${data.importedCount} hồ sơ${
+            data.mergedGroupCount ? `, bổ sung nhóm cho ${data.mergedGroupCount} hồ sơ` : ""
+          }${
+            data.reviewFlaggedCount
+              ? `, gắn cờ Chờ rà soát ${data.reviewFlaggedCount} dòng thiếu ngày sinh`
+              : ""
+          }${data.skippedCount ? `. Bỏ qua ${data.skippedCount} dòng.` : "."}`
+        );
+        setImportPreview(null);
+        setImportFile(null);
+        loadCitizens();
+      }
+    } finally {
+      setImportLoading(false);
     }
+  }
+
+  async function handleDroppedOrSelectedFile(file: File | undefined | null) {
+    if (!file) return;
+    setImportMsg("");
+    setImportFile(file);
+    await runImportRequest(file, "preview");
+  }
+
+  async function handleExcelImport(e: React.ChangeEvent<HTMLInputElement>) {
+    await handleDroppedOrSelectedFile(e.target.files?.[0]);
     e.target.value = "";
   }
 
@@ -328,6 +397,18 @@ export default function CitizensPage() {
 
           {canEdit && (
             <div className="flex flex-wrap gap-2">
+              <a
+                href={`/api/citizens/export?${new URLSearchParams({
+                  ...(q ? { q } : {}),
+                  ...(villageFilter ? { villageId: villageFilter } : {}),
+                  ...(statusFilter ? { status: statusFilter } : {}),
+                  ...(groupFilter ? { groupId: groupFilter } : {}),
+                }).toString()}`}
+                className="flex items-center gap-1.5 rounded-lg border border-emerald-600 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Xuất Excel đang lọc</span>
+              </a>
               <a
                 href="/api/citizens/import"
                 className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
@@ -355,6 +436,42 @@ export default function CitizensPage() {
             </div>
           )}
         </div>
+
+        {canEdit && (
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOverImport(true);
+            }}
+            onDragLeave={() => setDragOverImport(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOverImport(false);
+              handleDroppedOrSelectedFile(e.dataTransfer.files?.[0]);
+            }}
+            className={`flex flex-col items-center justify-between gap-2 rounded-xl border-2 border-dashed px-4 py-3 text-xs transition sm:flex-row ${
+              dragOverImport
+                ? "border-blue-600 bg-blue-50 text-blue-900"
+                : "border-slate-300 bg-slate-50/70 text-slate-600"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Upload className="h-4 w-4 shrink-0 text-blue-700" />
+              <span>
+                <strong>Kéo thả tệp Excel (.xlsx)</strong> từ Phòng VH-XH (4 sheet) hoặc Mẫu chuẩn vào đây để tự động lọc tiêu đề ngang, chuẩn hóa 10 thôn Xã Bình An &amp; gán điểm theo Bảng điểm Lãnh đạo.
+              </span>
+            </div>
+            <label className="shrink-0 cursor-pointer rounded-lg border border-blue-700 bg-white px-3 py-1.5 font-semibold text-blue-800 hover:bg-blue-50">
+              Chọn tệp...
+              <input
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={handleExcelImport}
+              />
+            </label>
+          </div>
+        )}
 
         {importMsg && (
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
@@ -973,6 +1090,224 @@ export default function CitizensPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Preview Import Excel */}
+      {importPreview && importFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl text-xs">
+            <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Xem trước dữ liệu Import &amp; Tự động gán điểm
+                </h2>
+                <p className="text-slate-500">
+                  Tệp: <strong>{importFile.name}</strong> • Định dạng:{" "}
+                  <span className="font-semibold text-blue-800">
+                    {importPreview.format === "VHXH_WELFARE"
+                      ? "Danh sách Phòng VH-XH (nhiều sheet, tự lọc tiêu đề ngang)"
+                      : "Mẫu chuẩn 10 cột"}
+                  </span>
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setImportPreview(null);
+                  setImportFile(null);
+                }}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <div className="rounded-lg bg-slate-50 p-3">
+                <div className="text-slate-500">Tổng dòng đọc</div>
+                <div className="text-lg font-bold text-slate-900">
+                  {importPreview.totalRowsRead}
+                </div>
+              </div>
+              <div className="rounded-lg bg-emerald-50 p-3">
+                <div className="text-emerald-700">Sẽ nhập mới</div>
+                <div className="text-lg font-bold text-emerald-800">
+                  {importPreview.willInsertCount}
+                </div>
+              </div>
+              <div className="rounded-lg bg-blue-50 p-3">
+                <div className="text-blue-700">Gộp thêm nhóm</div>
+                <div className="text-lg font-bold text-blue-800">
+                  {importPreview.willMergeGroupCount}
+                </div>
+              </div>
+              <div className="rounded-lg bg-amber-50 p-3">
+                <div className="text-amber-700">Chờ rà soát</div>
+                <div className="text-lg font-bold text-amber-800">
+                  {importPreview.reviewFlaggedCount}
+                </div>
+              </div>
+              <div className="rounded-lg bg-red-50 p-3">
+                <div className="text-red-700">Bỏ qua</div>
+                <div className="text-lg font-bold text-red-800">
+                  {importPreview.skippedTotal}
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-4 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={skipReducedPaused}
+                  disabled={importLoading}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setSkipReducedPaused(val);
+                    runImportRequest(importFile, "preview", { skipReducedPaused: val });
+                  }}
+                />
+                <span>
+                  Bỏ qua dòng đã giảm / tạm dừng chi (bỏ chọn = vẫn nhập ở trạng thái &quot;Đã giảm / Tạm dừng&quot;)
+                </span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={attachGroupOnDuplicate}
+                  disabled={importLoading}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setAttachGroupOnDuplicate(val);
+                    runImportRequest(importFile, "preview", {
+                      attachGroupOnDuplicate: val,
+                    });
+                  }}
+                />
+                <span>
+                  Tự bổ sung nhóm đối tượng nếu trùng Họ tên + Năm sinh + Thôn trong hệ thống
+                </span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={allowIncompleteDob}
+                  disabled={importLoading}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setAllowIncompleteDob(val);
+                    runImportRequest(importFile, "preview", { allowIncompleteDob: val });
+                  }}
+                />
+                <span>
+                  Vẫn nhập các dòng thiếu/lỗi năm sinh với trạng thái &quot;Chờ rà soát lại&quot;
+                </span>
+              </label>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="font-semibold text-slate-700">
+                  Nếu dòng thiếu tên thôn:
+                </span>
+                <select
+                  value={fallbackVillageId}
+                  disabled={importLoading}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setFallbackVillageId(val);
+                    runImportRequest(importFile, "preview", { fallbackVillageId: val });
+                  }}
+                  className="rounded border border-slate-300 bg-white px-2.5 py-1"
+                >
+                  <option value={0}>Bỏ qua các dòng thiếu tên thôn</option>
+                  {villages
+                    .filter((v) => v.name && !v.name.includes("(dự phòng)"))
+                    .map((v) => (
+                      <option key={v.id} value={v.id}>
+                        Gán tạm vào: {v.name} ({v.code})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="rounded-lg border border-slate-200 p-3">
+                <h3 className="mb-2 font-bold text-slate-900">
+                  Nhóm đối tượng &amp; Điểm tự động gán (theo Bảng điểm Lãnh đạo)
+                </h3>
+                <div className="max-h-56 space-y-1 overflow-y-auto">
+                  {importPreview.byGroup.map((g, idx) => (
+                    <div
+                      key={`${g.groupCode}-${idx}`}
+                      className="flex items-center justify-between border-b border-slate-100 py-1"
+                    >
+                      <span className="truncate pr-2" title={g.rawSection}>
+                        {g.groupName}
+                      </span>
+                      <span className="shrink-0 font-semibold text-slate-800">
+                        {g.count} người •{" "}
+                        <span className="text-blue-700">{g.baseScore} điểm</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 p-3">
+                <h3 className="mb-2 font-bold text-slate-900">
+                  Phân bố sau chuẩn hóa theo Thôn
+                </h3>
+                <div className="max-h-56 space-y-1 overflow-y-auto">
+                  {importPreview.byVillage.map((v) => (
+                    <div
+                      key={v.villageName}
+                      className="flex items-center justify-between border-b border-slate-100 py-1"
+                    >
+                      <span>{v.villageName}</span>
+                      <span className="font-bold text-slate-800">{v.count} người</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {importPreview.sampleWarnings.length > 0 && (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="mb-1 font-bold text-amber-900">
+                  Mẫu các dòng bỏ qua / lưu ý ({importPreview.skippedTotal} dòng):
+                </div>
+                <div className="max-h-28 space-y-0.5 overflow-y-auto text-[11px] text-amber-800">
+                  {importPreview.sampleWarnings.map((w, i) => (
+                    <div key={i}>
+                      [{w.sheet} dòng {w.row}] {w.name}: {w.reason}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setImportPreview(null);
+                  setImportFile(null);
+                }}
+                className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={importLoading}
+                onClick={() => runImportRequest(importFile, "commit")}
+                className="rounded-lg bg-blue-800 px-5 py-2 font-semibold text-white hover:bg-blue-900 disabled:opacity-50"
+              >
+                {importLoading
+                  ? "Đang nhập dữ liệu..."
+                  : `Xác nhận nhập (${importPreview.willInsertCount} mới, ${importPreview.willMergeGroupCount} gộp)`}
+              </button>
             </div>
           </div>
         </div>

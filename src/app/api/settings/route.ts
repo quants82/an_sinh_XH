@@ -66,10 +66,17 @@ export async function PATCH(req: Request) {
     villageUpdates?: Array<{ id?: number; code: string; name: string; isActive: boolean }>;
     groupUpdates?: Array<{
       id: number;
+      name?: string;
       baseScore: number;
       isActive: boolean;
       defaultDurationMonths: number | null;
     }>;
+    newGroup?: {
+      code: string;
+      name: string;
+      baseScore: number;
+      defaultDurationMonths?: number | null;
+    };
   };
 
   const sRows = await db.select().from(systemSettings).limit(1);
@@ -122,12 +129,40 @@ export async function PATCH(req: Request) {
       await db
         .update(supportGroups)
         .set({
+          ...(g.name?.trim() ? { name: g.name.trim() } : {}),
           baseScore: g.baseScore,
           isActive: g.isActive,
           defaultDurationMonths: g.defaultDurationMonths,
         })
         .where(eq(supportGroups.id, g.id));
     }
+  }
+
+  if (body.newGroup?.code && body.newGroup?.name) {
+    const cleanCode = body.newGroup.code.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+    const exists = await db
+      .select({ id: supportGroups.id })
+      .from(supportGroups)
+      .where(eq(supportGroups.code, cleanCode))
+      .limit(1);
+    if (exists.length > 0) {
+      return NextResponse.json(
+        { error: `Mã nhóm '${cleanCode}' đã tồn tại` },
+        { status: 400 }
+      );
+    }
+    const curGroups = await db.select({ sortOrder: supportGroups.sortOrder }).from(supportGroups);
+    const nextSort = curGroups.reduce((m, x) => Math.max(m, x.sortOrder), 0) + 1;
+    await db.insert(supportGroups).values({
+      code: cleanCode,
+      name: body.newGroup.name.trim(),
+      baseScore: Number(body.newGroup.baseScore) || 5,
+      defaultDurationMonths: body.newGroup.defaultDurationMonths ?? null,
+      isTemporaryDefault: Boolean(body.newGroup.defaultDurationMonths),
+      isPhase2Optional: false,
+      isActive: true,
+      sortOrder: nextSort,
+    });
   }
 
   await writeAuditLog({

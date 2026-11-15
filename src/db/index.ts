@@ -253,7 +253,7 @@ async function runInit(): Promise<void> {
   };
 
   // Run raw DDL safely using sql tag from drizzle-orm
-  const { sql } = await import("drizzle-orm");
+  const { eq, sql } = await import("drizzle-orm");
   for (const ddl of DDL_STATEMENTS) {
     await db.execute(sql.raw(ddl));
   }
@@ -270,16 +270,28 @@ async function runInit(): Promise<void> {
     });
   }
 
-  // Seed default 17 villages if empty
-  const existingVillages = await db.select().from(schema.villages).limit(1);
+  // Seed default villages or migrate untouched placeholder names ("Thôn 1".."Thôn 17")
+  const existingVillages = await db.select().from(schema.villages);
   if (existingVillages.length === 0) {
     await db.insert(schema.villages).values(DEFAULT_VILLAGES);
+  } else {
+    const byCode = new Map(existingVillages.map((v) => [v.code, v]));
+    for (const defV of DEFAULT_VILLAGES) {
+      const cur = byCode.get(defV.code);
+      if (!cur) {
+        await db.insert(schema.villages).values(defV).onConflictDoNothing();
+      } else if (/^Thôn \d+$/.test(cur.name.trim())) {
+        await db
+          .update(schema.villages)
+          .set({ name: defV.name, isActive: defV.isActive, sortOrder: defV.sortOrder })
+          .where(eq(schema.villages.id, cur.id));
+      }
+    }
   }
 
-  // Seed default support groups if empty
-  const existingGroups = await db.select().from(schema.supportGroups).limit(1);
-  if (existingGroups.length === 0) {
-    await db.insert(schema.supportGroups).values(DEFAULT_SUPPORT_GROUPS);
+  // Ensure all canonical/NĐ 176/20/335 support groups exist (idempotent)
+  for (const g of DEFAULT_SUPPORT_GROUPS) {
+    await db.insert(schema.supportGroups).values(g).onConflictDoNothing();
   }
 }
 
