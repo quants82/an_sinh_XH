@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Shield, Lock, User } from "lucide-react";
+import { Lock, User } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -53,9 +53,11 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#0f294a] via-[#153967] to-[#1e497d] p-4">
       <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 text-blue-800">
-            <Shield className="h-6 w-6" />
-          </div>
+          <img
+            src="/app-icon.png"
+            alt="Biểu tượng Hệ thống An sinh Xã hội"
+            className="mx-auto mb-3 h-14 w-14 rounded-2xl shadow-md ring-1 ring-slate-200"
+          />
           <div className="text-xs font-bold uppercase tracking-wider text-blue-700">
             Chuyển đổi số cơ sở
           </div>

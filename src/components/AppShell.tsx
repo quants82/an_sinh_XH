@@ -215,15 +215,22 @@ export function AppShell({
     <div className="flex min-h-screen bg-slate-100">
       {/* Sidebar Desktop */}
       <aside className="no-print hidden w-64 flex-col bg-[#0f294a] text-white md:flex">
-        <div className="border-b border-blue-900/60 px-5 py-4">
-          <div className="text-xs font-semibold uppercase tracking-wider text-blue-300">
-            Chuyển đổi số cơ sở
-          </div>
-          <div className="mt-1 text-base font-bold leading-snug">
-            An sinh Xã hội
-          </div>
-          <div className="text-xs text-blue-200">
-            {settings.communeName} ({settings.communeCode})
+        <div className="flex items-center gap-3 border-b border-blue-900/60 px-4 py-4">
+          <img
+            src="/app-icon.png"
+            alt="An sinh Xã hội"
+            className="h-10 w-10 shrink-0 rounded-xl shadow-xs ring-1 ring-white/20"
+          />
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-blue-300">
+              Chuyển đổi số cơ sở
+            </div>
+            <div className="truncate text-sm font-bold leading-snug">
+              An sinh Xã hội
+            </div>
+            <div className="truncate text-xs text-blue-200">
+              {settings.communeName} ({settings.communeCode})
+            </div>
           </div>
         </div>
 
@@ -290,9 +297,16 @@ export function AppShell({
           />
           <aside className="relative z-10 flex w-72 flex-col bg-[#0f294a] text-white">
             <div className="flex items-center justify-between border-b border-blue-900 px-4 py-4">
-              <div>
-                <div className="font-bold">An sinh Xã hội</div>
-                <div className="text-xs text-blue-200">{settings.communeName}</div>
+              <div className="flex items-center gap-2.5">
+                <img
+                  src="/app-icon.png"
+                  alt="An sinh Xã hội"
+                  className="h-9 w-9 shrink-0 rounded-xl ring-1 ring-white/20"
+                />
+                <div>
+                  <div className="font-bold">An sinh Xã hội</div>
+                  <div className="text-xs text-blue-200">{settings.communeName}</div>
+                </div>
               </div>
               <button onClick={() => setMobileOpen(false)}>
                 <X className="h-5 w-5" />

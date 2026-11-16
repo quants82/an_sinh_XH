@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   HardDrive,
-  ShieldCheck,
   ArrowRight,
   AlertCircle,
 } from "lucide-react";
@@ -96,9 +95,11 @@ export default function OnboardingPage() {
     <div className="min-h-screen bg-gradient-to-br from-[#0f294a] to-[#1e497d] px-4 py-10">
       <div className="mx-auto max-w-2xl rounded-2xl bg-white p-6 shadow-2xl md:p-8">
         <div className="mb-6 flex items-center gap-3 border-b border-slate-200 pb-4">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-800">
-            <ShieldCheck className="h-6 w-6" />
-          </div>
+          <img
+            src="/app-icon.png"
+            alt="Biểu tượng Hệ thống An sinh Xã hội"
+            className="h-12 w-12 shrink-0 rounded-xl shadow-xs ring-1 ring-slate-200"
+          />
           <div>
             <h1 className="text-xl font-bold text-slate-900">
               Khởi tạo Hệ thống An sinh Xã hội số
