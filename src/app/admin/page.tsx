@@ -117,6 +117,15 @@ export default function AdminPage() {
     loadAll();
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
+      const tabParam = sp.get("tab");
+      if (
+        tabParam === "users" ||
+        tabParam === "drive" ||
+        tabParam === "transfer" ||
+        tabParam === "rules"
+      ) {
+        setTab(tabParam);
+      }
       const driveStatus = sp.get("drive");
       const driveMsg = sp.get("msg");
       if (driveStatus) {

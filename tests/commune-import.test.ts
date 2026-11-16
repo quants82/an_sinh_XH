@@ -11,6 +11,7 @@ import {
   buildScoringRulesWorkbook,
   parseScoringRulesWorkbook,
 } from "../src/lib/excel";
+import { getRouteGuide, ROUTE_GUIDES } from "../src/lib/route-guides";
 
 describe("Bình An village alias & typo normalization", () => {
   it("maps merged hamlets and spelling variants to 10 canonical villages", () => {
@@ -165,5 +166,24 @@ describe("VH-XH multi-sheet workbook parsing & Leader scoring Excel round-trip",
       isActive: false,
       defaultDurationMonths: 6,
     });
+  });
+
+  it("provides step-by-step user guides for all 7 sidebar menus", () => {
+    const expectedRoutes = [
+      "/dashboard",
+      "/citizens",
+      "/programs",
+      "/reports",
+      "/tasks",
+      "/audit",
+      "/admin",
+    ];
+    assert.equal(ROUTE_GUIDES.length, 7);
+    for (const r of expectedRoutes) {
+      const g = getRouteGuide(r);
+      assert.equal(g.href, r);
+      assert.ok(g.steps.length >= 2);
+      assert.ok(g.tip.length > 0);
+    }
   });
 });
