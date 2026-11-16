@@ -19,6 +19,7 @@ interface Village {
   id: number;
   code: string;
   name: string;
+  isActive?: boolean;
 }
 
 interface SupportGroup {
@@ -1278,7 +1279,7 @@ export default function CitizensPage() {
                 >
                   <option value={0}>Bỏ qua các dòng thiếu tên thôn</option>
                   {villages
-                    .filter((v) => v.name && !v.name.includes("(dự phòng)"))
+                    .filter((v) => v.isActive !== false && v.name)
                     .map((v) => (
                       <option key={v.id} value={v.id}>
                         Gán tạm vào: {v.name} ({v.code})

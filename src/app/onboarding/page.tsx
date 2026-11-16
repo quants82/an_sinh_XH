@@ -20,7 +20,18 @@ export default function OnboardingPage() {
   const [username, setUsername] = useState("lanhdao");
   const [password, setPassword] = useState("");
   const [villagesText, setVillagesText] = useState(
-    Array.from({ length: 17 }, (_, i) => `Thôn ${i + 1}`).join("\n")
+    [
+      "Phú Lạc",
+      "Kiên Long",
+      "Kiên Ngãi",
+      "Trường Định",
+      "Vĩnh Lộc",
+      "An Chánh",
+      "Mỹ An",
+      "Mỹ Thuận",
+      "An Vinh",
+      "Bỉnh Đức",
+    ].join("\n")
   );
   const [driveOAuthConfigured, setDriveOAuthConfigured] = useState(false);
   const [driveConnected, setDriveConnected] = useState(false);
@@ -211,7 +222,7 @@ export default function OnboardingPage() {
 
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-700">
-                Danh sách 17 thôn (mỗi dòng 1 tên thôn, hệ thống tự gán mã cố định T01..T17)
+                Danh sách các thôn (mỗi dòng 1 tên thôn, hệ thống tự gán mã cố định T01, T02...)
               </label>
               <textarea
                 rows={5}

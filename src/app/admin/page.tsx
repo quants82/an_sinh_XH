@@ -903,8 +903,8 @@ export default function AdminPage() {
                     className="font-semibold text-blue-700 hover:underline"
                   >
                     {showReserveVillages
-                      ? "Ẩn mã thôn dự phòng"
-                      : `Hiện ${villages.filter((v) => !v.isActive).length} mã thôn dự phòng`}
+                      ? "Ẩn thôn đang tạm tắt"
+                      : `Hiện ${villages.filter((v) => !v.isActive).length} thôn đang tạm tắt`}
                   </button>
                 )}
               </div>

@@ -109,15 +109,4 @@ export const BINH_AN_CANONICAL_VILLAGES = [
   { code: "T10", name: "Bỉnh Đức", sortOrder: 10, isActive: true },
 ];
 
-export const DEFAULT_VILLAGES = [
-  ...BINH_AN_CANONICAL_VILLAGES,
-  ...Array.from({ length: 7 }, (_, i) => {
-    const num = String(i + 11).padStart(2, "0");
-    return {
-      code: `T${num}`,
-      name: `Thôn ${i + 11} (dự phòng)`,
-      sortOrder: i + 11,
-      isActive: false,
-    };
-  }),
-];
+export const DEFAULT_VILLAGES = BINH_AN_CANONICAL_VILLAGES;

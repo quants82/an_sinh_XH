@@ -255,7 +255,7 @@ async function runInit(): Promise<void> {
     const probe = await db.execute(sql`
       SELECT
         (SELECT COUNT(*)::int FROM support_groups) AS gcnt,
-        (SELECT COUNT(*)::int FROM villages WHERE name ~ '^Thôn [0-9]+$') AS oldv,
+        (SELECT COUNT(*)::int FROM villages WHERE name ~ '^Thôn [0-9]+') AS oldv,
         (SELECT EXISTS (SELECT 1 FROM system_settings)) AS has_settings
     `);
     const row = (
@@ -290,21 +290,35 @@ async function runInit(): Promise<void> {
     });
   }
 
-  // Seed default villages or migrate untouched placeholder names ("Thôn 1".."Thôn 17")
+  // Seed 10 canonical villages, migrate untouched placeholder names & prune unused placeholder T11..T17 rows
   const existingVillages = await db.select().from(schema.villages);
   if (existingVillages.length === 0) {
     await db.insert(schema.villages).values(DEFAULT_VILLAGES);
   } else {
     const byCode = new Map(existingVillages.map((v) => [v.code, v]));
+    const validCodes = new Set(DEFAULT_VILLAGES.map((v) => v.code));
     for (const defV of DEFAULT_VILLAGES) {
       const cur = byCode.get(defV.code);
       if (!cur) {
         await db.insert(schema.villages).values(defV).onConflictDoNothing();
-      } else if (/^Thôn \d+$/.test(cur.name.trim())) {
+      } else if (/^Thôn \d+/.test(cur.name.trim())) {
         await db
           .update(schema.villages)
           .set({ name: defV.name, isActive: defV.isActive, sortOrder: defV.sortOrder })
           .where(eq(schema.villages.id, cur.id));
+      }
+    }
+    // Xóa bỏ các mã thừa (T11..T17) nếu vẫn là tên mẫu "Thôn 11.." và chưa phát sinh dữ liệu liên kết
+    for (const v of existingVillages) {
+      if (!validCodes.has(v.code) && /^Thôn \d+/.test(v.name.trim())) {
+        const [refCit, refUsr, refTask] = await Promise.all([
+          db.select({ id: schema.citizens.id }).from(schema.citizens).where(eq(schema.citizens.villageId, v.id)).limit(1),
+          db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.villageId, v.id)).limit(1),
+          db.select({ id: schema.tasks.id }).from(schema.tasks).where(eq(schema.tasks.villageId, v.id)).limit(1),
+        ]);
+        if (refCit.length === 0 && refUsr.length === 0 && refTask.length === 0) {
+          await db.delete(schema.villages).where(eq(schema.villages.id, v.id));
+        }
       }
     }
   }
