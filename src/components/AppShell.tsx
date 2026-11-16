@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -39,6 +39,12 @@ export interface SystemSettingsSummary {
   driveOAuthConfigured: boolean;
 }
 
+let cachedShellState: {
+  user: CurrentUserClient;
+  settings: SystemSettingsSummary;
+  fetchedAt: number;
+} | null = null;
+
 export function AppShell({
   children,
   onReady,
@@ -51,10 +57,19 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<CurrentUserClient | null>(null);
-  const [settings, setSettings] = useState<SystemSettingsSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<CurrentUserClient | null>(
+    () => cachedShellState?.user ?? null
+  );
+  const [settings, setSettings] = useState<SystemSettingsSummary | null>(
+    () => cachedShellState?.settings ?? null
+  );
+  const [loading, setLoading] = useState(() => !cachedShellState);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const onReadyRef = useRef(onReady);
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
 
   // Forced password change modal state
   const [currentPassword, setCurrentPassword] = useState("");
@@ -64,32 +79,53 @@ export function AppShell({
 
   useEffect(() => {
     let active = true;
+    if (cachedShellState) {
+      onReadyRef.current?.({
+        user: cachedShellState.user,
+        settings: cachedShellState.settings,
+      });
+      // Revalidate silently at most once per 30s so menu switching is instant
+      if (Date.now() - cachedShellState.fetchedAt < 30000) {
+        return () => {
+          active = false;
+        };
+      }
+    }
+
     fetch("/api/auth/status")
       .then((r) => r.json())
       .then((data) => {
         if (!active) return;
         if (data.needsOnboarding) {
+          cachedShellState = null;
           router.replace("/onboarding");
           return;
         }
         if (!data.user) {
+          cachedShellState = null;
           router.replace("/login");
           return;
         }
+        cachedShellState = {
+          user: data.user,
+          settings: data.settings,
+          fetchedAt: Date.now(),
+        };
         setUser(data.user);
         setSettings(data.settings);
         setLoading(false);
-        onReady?.({ user: data.user, settings: data.settings });
+        onReadyRef.current?.({ user: data.user, settings: data.settings });
       })
       .catch(() => {
-        if (active) router.replace("/login");
+        if (active && !cachedShellState) router.replace("/login");
       });
     return () => {
       active = false;
     };
-  }, [router, onReady]);
+  }, [router]);
 
   async function handleLogout() {
+    cachedShellState = null;
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
   }

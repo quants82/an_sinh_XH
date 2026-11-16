@@ -86,9 +86,14 @@ export default function CitizensPage() {
   const [driveConnected, setDriveConnected] = useState(false);
 
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [villageFilter, setVillageFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalCitizens, setTotalCitizens] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [listLoading, setListLoading] = useState(false);
 
   // Modal Create/Edit
   const [modalOpen, setModalOpen] = useState(false);
@@ -155,18 +160,34 @@ export default function CitizensPage() {
       });
   }, []);
 
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedQ(q);
+      setPage(1);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
   const loadCitizens = useCallback(() => {
     const params = new URLSearchParams();
-    if (q) params.set("q", q);
+    if (debouncedQ) params.set("q", debouncedQ);
     if (villageFilter) params.set("villageId", villageFilter);
     if (statusFilter) params.set("status", statusFilter);
     if (groupFilter) params.set("groupId", groupFilter);
+    params.set("page", String(page));
+    params.set("pageSize", "50");
+    setListLoading(true);
     fetch(`/api/citizens?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.citizens) setCitizens(d.citizens);
-      });
-  }, [q, villageFilter, statusFilter, groupFilter]);
+        if (d?.citizens) {
+          setCitizens(d.citizens);
+          setTotalCitizens(d.total ?? d.citizens.length);
+          setTotalPages(d.totalPages ?? 1);
+        }
+      })
+      .finally(() => setListLoading(false));
+  }, [debouncedQ, villageFilter, statusFilter, groupFilter, page]);
 
   useEffect(() => {
     loadMeta();
@@ -495,7 +516,10 @@ export default function CitizensPage() {
           {user?.role !== "VILLAGE_HEAD" && (
             <select
               value={villageFilter}
-              onChange={(e) => setVillageFilter(e.target.value)}
+              onChange={(e) => {
+                setVillageFilter(e.target.value);
+                setPage(1);
+              }}
               className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
             >
               <option value="">Tất cả các thôn</option>
@@ -509,7 +533,10 @@ export default function CitizensPage() {
 
           <select
             value={groupFilter}
-            onChange={(e) => setGroupFilter(e.target.value)}
+            onChange={(e) => {
+              setGroupFilter(e.target.value);
+              setPage(1);
+            }}
             className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
           >
             <option value="">Tất cả nhóm đối tượng</option>
@@ -522,7 +549,10 @@ export default function CitizensPage() {
 
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(1);
+            }}
             className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
           >
             <option value="">Tất cả trạng thái</option>
@@ -647,6 +677,33 @@ export default function CitizensPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Pagination */}
+        <div className="flex flex-col items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-600 sm:flex-row">
+          <div>
+            {listLoading
+              ? "Đang tải danh sách..."
+              : `Trang ${page} / ${totalPages} • Tổng ${totalCitizens.toLocaleString("vi-VN")} hồ sơ (50 dòng/trang)`}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={page <= 1 || listLoading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            >
+              ← Trang trước
+            </button>
+            <button
+              type="button"
+              disabled={page >= totalPages || listLoading}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            >
+              Trang sau →
+            </button>
+          </div>
         </div>
       </div>
 

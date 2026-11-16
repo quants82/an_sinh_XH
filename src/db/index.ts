@@ -248,16 +248,36 @@ const DDL_STATEMENTS = [
 ];
 
 async function runInit(): Promise<void> {
-  const executor = db as unknown as {
-    execute: (q: { sql?: string } | string) => Promise<unknown>;
-  };
-
-  // Run raw DDL safely using sql tag from drizzle-orm
   const { eq, sql } = await import("drizzle-orm");
+
+  // Fast path: chỉ chạy 1 truy vấn kiểm tra nếu bảng & dữ liệu nền đã sẵn sàng
+  try {
+    const probe = await db.execute(sql`
+      SELECT
+        (SELECT COUNT(*)::int FROM support_groups) AS gcnt,
+        (SELECT COUNT(*)::int FROM villages WHERE name ~ '^Thôn [0-9]+$') AS oldv,
+        (SELECT EXISTS (SELECT 1 FROM system_settings)) AS has_settings
+    `);
+    const row = (
+      probe as {
+        rows?: Array<{ gcnt?: number; oldv?: number; has_settings?: boolean }>;
+      }
+    ).rows?.[0];
+    if (
+      row &&
+      Number(row.gcnt) >= DEFAULT_SUPPORT_GROUPS.length &&
+      Number(row.oldv) === 0 &&
+      row.has_settings
+    ) {
+      return;
+    }
+  } catch {
+    // Bảng chưa tồn tại -> chạy DDL khởi tạo bên dưới
+  }
+
   for (const ddl of DDL_STATEMENTS) {
     await db.execute(sql.raw(ddl));
   }
-  void executor;
 
   // Seed default system settings if empty
   const existingSettings = await db.select().from(schema.systemSettings).limit(1);
@@ -289,10 +309,11 @@ async function runInit(): Promise<void> {
     }
   }
 
-  // Ensure all canonical/NĐ 176/20/335 support groups exist (idempotent)
-  for (const g of DEFAULT_SUPPORT_GROUPS) {
-    await db.insert(schema.supportGroups).values(g).onConflictDoNothing();
-  }
+  // Ensure all canonical/NĐ 176/20/335 support groups exist in 1 batch query
+  await db
+    .insert(schema.supportGroups)
+    .values(DEFAULT_SUPPORT_GROUPS)
+    .onConflictDoNothing();
 }
 
 export async function ensureDbReady(): Promise<void> {

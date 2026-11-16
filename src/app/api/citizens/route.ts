@@ -35,28 +35,38 @@ const CreateCitizenSchema = z.object({
   groupIds: z.array(z.number().int().positive()).min(1, "Chọn ít nhất 1 nhóm đối tượng"),
 });
 
+let lastTempSweepAt = 0;
+
 export async function GET(req: Request) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
 
-  // Auto-transition expired temporary records to PENDING_REVIEW
-  await db
-    .update(citizens)
-    .set({ status: "PENDING_REVIEW", updatedAt: new Date() })
-    .where(
-      and(
-        eq(citizens.status, "TEMPORARY"),
-        lt(citizens.tempExpiresAt, new Date())
-      )
-    );
+  // Auto-transition expired temporary records at most once per 5 minutes per worker
+  const nowMs = Date.now();
+  if (nowMs - lastTempSweepAt > 5 * 60 * 1000) {
+    lastTempSweepAt = nowMs;
+    await db
+      .update(citizens)
+      .set({ status: "PENDING_REVIEW", updatedAt: new Date() })
+      .where(
+        and(
+          eq(citizens.status, "TEMPORARY"),
+          lt(citizens.tempExpiresAt, new Date())
+        )
+      );
+  }
 
   const url = new URL(req.url);
   const search = url.searchParams.get("q")?.trim().toLowerCase() || "";
   const villageFilter = url.searchParams.get("villageId");
   const statusFilter = url.searchParams.get("status");
   const groupFilter = url.searchParams.get("groupId");
+  const pageRaw = url.searchParams.get("page");
+  const pageSizeRaw = url.searchParams.get("pageSize");
+  const page = pageRaw ? Math.max(1, Number(pageRaw) || 1) : null;
+  const pageSize = pageSizeRaw ? Math.min(200, Math.max(10, Number(pageSizeRaw) || 50)) : 50;
 
   const [citizenRows, villageRows, groupRows, cgRows, historyRows, evidenceRows] =
     await Promise.all([
@@ -123,7 +133,13 @@ export async function GET(req: Request) {
     return true;
   });
 
-  const items = filtered.map((c) => {
+  const total = filtered.length;
+  const totalPages = page ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+  const targetRows = page
+    ? filtered.slice((page - 1) * pageSize, page * pageSize)
+    : filtered;
+
+  const items = targetRows.map((c) => {
     const v = vMap.get(c.villageId);
     const cGroups = groupsByCitizen.get(c.id) ?? [];
     const baseScore = cGroups.reduce((s, g) => s + g.baseScore, 0);
@@ -180,7 +196,13 @@ export async function GET(req: Request) {
     };
   });
 
-  return NextResponse.json({ citizens: items });
+  return NextResponse.json({
+    citizens: items,
+    total,
+    page: page ?? 1,
+    pageSize: page ? pageSize : total,
+    totalPages,
+  });
 }
 
 export async function POST(req: Request) {
