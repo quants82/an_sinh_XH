@@ -10,6 +10,7 @@ import { canEditCitizens, getCurrentUser } from "@/lib/auth";
 import { classifySupportTier } from "@/lib/scoring";
 import { runAllocationForProgram } from "@/lib/program-allocator";
 import { writeAuditLog } from "@/lib/audit";
+import { persistCustomSupportKind } from "@/lib/support-kinds";
 import { z } from "zod";
 
 const CreateProgramSchema = z.object({
@@ -17,7 +18,8 @@ const CreateProgramSchema = z.object({
   title: z.string().min(3, "Tên chương trình tối thiểu 3 ký tự"),
   occasionKey: z.string().min(2, "Mã dịp hỗ trợ không được trống (vd: TET_2026)"),
   donorName: z.string().min(2, "Tên đơn vị tài trợ không được trống"),
-  supportKind: z.enum(["CASH", "GIFT", "SCHOLARSHIP", "OTHER"]).default("GIFT"),
+  supportKind: z.string().trim().min(1).default("GIFT"),
+  customSupportKind: z.string().optional(),
   unitValue: z.number().int().min(0),
   totalSlots: z.number().int().min(1).max(5000),
   filterGroupIds: z.array(z.number().int().positive()).default([]),
@@ -111,6 +113,12 @@ export async function POST(req: Request) {
     s?.mediumSupportMax ?? 2000000
   );
 
+  let resolvedSupportKind = data.supportKind;
+  if (resolvedSupportKind === "OTHER" && data.customSupportKind?.trim()) {
+    const saved = await persistCustomSupportKind(data.customSupportKind);
+    resolvedSupportKind = saved.savedLabel;
+  }
+
   const [created] = await db
     .insert(supportPrograms)
     .values({
@@ -118,7 +126,7 @@ export async function POST(req: Request) {
       title: data.title.trim(),
       occasionKey: data.occasionKey.trim().toUpperCase(),
       donorName: data.donorName.trim(),
-      supportKind: data.supportKind,
+      supportKind: resolvedSupportKind,
       unitValue: data.unitValue,
       tier,
       totalSlots: data.totalSlots,

@@ -29,6 +29,7 @@ export async function runAllocationForProgram(programId: number) {
     historyRows,
     otherAllocRows,
     allPrograms,
+    currentAllocs,
   ] = await Promise.all([
     db.select().from(systemSettings).limit(1),
     db.select().from(citizens),
@@ -38,7 +39,17 @@ export async function runAllocationForProgram(programId: number) {
     db.select().from(supportHistory),
     db.select().from(supportAllocations),
     db.select().from(supportPrograms),
+    db
+      .select()
+      .from(supportAllocations)
+      .where(eq(supportAllocations.programId, programId)),
   ]);
+
+  const preservedExceptions = new Map(
+    currentAllocs
+      .filter((a) => a.leaderExceptionApproved)
+      .map((a) => [a.citizenId, a])
+  );
 
   const s = settingsRows[0];
   const vMap = new Map(villageRows.map((v) => [v.id, v]));
@@ -139,22 +150,50 @@ export async function runAllocationForProgram(programId: number) {
     .delete(supportAllocations)
     .where(eq(supportAllocations.programId, programId));
 
-  if (results.length > 0) {
-    await db.insert(supportAllocations).values(
-      results.map((r) => ({
+  const seenCitizenIds = new Set<number>();
+  const rowsToInsert = results.map((r) => {
+    seenCitizenIds.add(r.citizenId);
+    const prev = preservedExceptions.get(r.citizenId);
+    return {
+      programId,
+      citizenId: r.citizenId,
+      allocationType: prev ? "PRIMARY" : r.allocationType,
+      baseScore: r.baseScore,
+      bonusScore: r.bonusScore,
+      penaltyScore: r.penaltyScore,
+      totalScore: r.totalScore,
+      receivedCountThisYear: r.receivedCountThisYear,
+      receivedInWindow: r.receivedInWindow,
+      warningFlag: r.warningFlag,
+      warningMessage: r.warningMessage,
+      leaderExceptionApproved: Boolean(prev),
+      exceptionReason: prev?.exceptionReason ?? null,
+    };
+  });
+
+  // Giữ lại các trường hợp đặc biệt/phát sinh được bổ sung tay ngoài bộ lọc
+  for (const [cid, prev] of preservedExceptions.entries()) {
+    if (!seenCitizenIds.has(cid)) {
+      rowsToInsert.push({
         programId,
-        citizenId: r.citizenId,
-        allocationType: r.allocationType,
-        baseScore: r.baseScore,
-        bonusScore: r.bonusScore,
-        penaltyScore: r.penaltyScore,
-        totalScore: r.totalScore,
-        receivedCountThisYear: r.receivedCountThisYear,
-        receivedInWindow: r.receivedInWindow,
-        warningFlag: r.warningFlag,
-        warningMessage: r.warningMessage,
-      }))
-    );
+        citizenId: prev.citizenId,
+        allocationType: "PRIMARY",
+        baseScore: prev.baseScore,
+        bonusScore: prev.bonusScore,
+        penaltyScore: prev.penaltyScore,
+        totalScore: prev.totalScore,
+        receivedCountThisYear: prev.receivedCountThisYear,
+        receivedInWindow: prev.receivedInWindow,
+        warningFlag: prev.warningFlag,
+        warningMessage: prev.warningMessage,
+        leaderExceptionApproved: true,
+        exceptionReason: prev.exceptionReason ?? "Bổ sung trực tiếp vào đợt",
+      });
+    }
+  }
+
+  for (let i = 0; i < rowsToInsert.length; i += 300) {
+    await db.insert(supportAllocations).values(rowsToInsert.slice(i, i + 300));
   }
 
   return results;

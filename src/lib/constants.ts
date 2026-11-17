@@ -41,6 +41,20 @@ export const SUPPORT_TIER_LABELS: Record<string, string> = {
   LARGE: "Hỗ trợ lớn",
 };
 
+export const DEFAULT_SUPPORT_KINDS = [
+  { value: "GIFT", label: "Quà / Hiện vật" },
+  { value: "CASH", label: "Tiền mặt" },
+  { value: "SCHOLARSHIP", label: "Học bổng" },
+  { value: "OTHER", label: "Khác (nhập thêm mới...)" },
+] as const;
+
+export const SUPPORT_KIND_LABELS: Record<string, string> = {
+  GIFT: "Quà / Hiện vật",
+  CASH: "Tiền mặt",
+  SCHOLARSHIP: "Học bổng",
+  OTHER: "Khác",
+};
+
 export const TASK_STATUS_LABELS: Record<string, string> = {
   NEW: "Mới giao",
   IN_PROGRESS: "Đang thực hiện",

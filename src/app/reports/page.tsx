@@ -63,6 +63,7 @@ const KIND_LABELS: Record<string, string> = {
 export default function ReportsPage() {
   const [data, setData] = useState<ReportPayload | null>(null);
   const [villages, setVillages] = useState<VillageOption[]>([]);
+  const [customSupportKinds, setCustomSupportKinds] = useState<string[]>([]);
   const [tab, setTab] = useState<"deliveries" | "nextWave">("deliveries");
 
   const [fromDate, setFromDate] = useState("");
@@ -93,7 +94,14 @@ export default function ReportsPage() {
     fetch("/api/settings")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.villages) setVillages(d.villages);
+        if (d?.villages) {
+          setVillages(
+            d.villages.filter((v: VillageOption & { isActive?: boolean }) => v.isActive !== false)
+          );
+        }
+        if (d?.customSupportKinds) {
+          setCustomSupportKinds(d.customSupportKinds);
+        }
       });
   }, []);
 
@@ -177,6 +185,11 @@ export default function ReportsPage() {
               <option value="GIFT">Quà / Hiện vật</option>
               <option value="CASH">Tiền mặt</option>
               <option value="SCHOLARSHIP">Học bổng</option>
+              {customSupportKinds.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
               <option value="OTHER">Khác</option>
             </select>
           </div>

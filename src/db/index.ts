@@ -209,6 +209,7 @@ const DDL_STATEMENTS = [
   `ALTER TABLE support_allocations ADD COLUMN IF NOT EXISTS delivery_note TEXT`,
   `ALTER TABLE support_history ADD COLUMN IF NOT EXISTS gift_details TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE support_history ADD COLUMN IF NOT EXISTS note TEXT`,
+  `ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS custom_support_kinds_json TEXT NOT NULL DEFAULT '[]'`,
   `CREATE TABLE IF NOT EXISTS tasks (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
@@ -256,18 +257,25 @@ async function runInit(): Promise<void> {
       SELECT
         (SELECT COUNT(*)::int FROM support_groups) AS gcnt,
         (SELECT COUNT(*)::int FROM villages WHERE name ~ '^Thôn [0-9]+') AS oldv,
-        (SELECT EXISTS (SELECT 1 FROM system_settings)) AS has_settings
+        (SELECT EXISTS (SELECT 1 FROM system_settings)) AS has_settings,
+        (SELECT COUNT(*)::int FROM information_schema.columns WHERE table_name = 'system_settings' AND column_name = 'custom_support_kinds_json') AS has_kinds_col
     `);
     const row = (
       probe as {
-        rows?: Array<{ gcnt?: number; oldv?: number; has_settings?: boolean }>;
+        rows?: Array<{
+          gcnt?: number;
+          oldv?: number;
+          has_settings?: boolean;
+          has_kinds_col?: number;
+        }>;
       }
     ).rows?.[0];
     if (
       row &&
       Number(row.gcnt) >= DEFAULT_SUPPORT_GROUPS.length &&
       Number(row.oldv) === 0 &&
-      row.has_settings
+      row.has_settings &&
+      Number(row.has_kinds_col) > 0
     ) {
       return;
     }
@@ -318,6 +326,11 @@ async function runInit(): Promise<void> {
         ]);
         if (refCit.length === 0 && refUsr.length === 0 && refTask.length === 0) {
           await db.delete(schema.villages).where(eq(schema.villages.id, v.id));
+        } else if (v.isActive) {
+          await db
+            .update(schema.villages)
+            .set({ isActive: false })
+            .where(eq(schema.villages.id, v.id));
         }
       }
     }

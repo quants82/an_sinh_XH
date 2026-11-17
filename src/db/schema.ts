@@ -26,6 +26,7 @@ export const systemSettings = pgTable("system_settings", {
   smallSupportPenalty: integer("small_support_penalty").notNull().default(5),
   largeSupportPenalty: integer("large_support_penalty").notNull().default(10),
   yearlyWarningThreshold: integer("yearly_warning_threshold").notNull().default(3),
+  customSupportKindsJson: text("custom_support_kinds_json").notNull().default("[]"),
   lastBackupAt: timestamp("last_backup_at"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

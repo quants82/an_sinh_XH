@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import { db, ensureDbReady } from "@/db";
 import { supportGroups, systemSettings, villages } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
-import { canLockPrograms, getCurrentUser } from "@/lib/auth";
+import { canEditCitizens, canLockPrograms, getCurrentUser } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
 import { isDriveOAuthConfigured } from "@/lib/drive";
+import {
+  parseCustomSupportKinds,
+  persistCustomSupportKind,
+} from "@/lib/support-kinds";
 
 export async function GET() {
   await ensureDbReady();
@@ -41,16 +45,14 @@ export async function GET() {
       : null,
     villages: villageRows,
     supportGroups: groupRows,
+    customSupportKinds: parseCustomSupportKinds(s?.customSupportKindsJson),
   });
 }
 
 export async function PATCH(req: Request) {
   const user = await getCurrentUser();
-  if (!user || !canLockPrograms(user.role)) {
-    return NextResponse.json(
-      { error: "Không có quyền thay đổi cấu hình" },
-      { status: 403 }
-    );
+  if (!user) {
+    return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
 
   const body = (await req.json()) as {
@@ -77,7 +79,26 @@ export async function PATCH(req: Request) {
       baseScore: number;
       defaultDurationMonths?: number | null;
     };
+    newSupportKind?: string;
   };
+
+  const isOnlyQuickOptionAdd =
+    (Boolean(body.newGroup) || Boolean(body.newSupportKind)) &&
+    !body.communeName &&
+    !body.villageUpdates &&
+    !body.groupUpdates &&
+    body.duplicateCheckMonths === undefined;
+
+  if (
+    isOnlyQuickOptionAdd
+      ? !canEditCitizens(user.role) || user.role === "VILLAGE_HEAD"
+      : !canLockPrograms(user.role)
+  ) {
+    return NextResponse.json(
+      { error: "Không có quyền thay đổi cấu hình" },
+      { status: 403 }
+    );
+  }
 
   const sRows = await db.select().from(systemSettings).limit(1);
   if (sRows[0]) {
@@ -153,15 +174,48 @@ export async function PATCH(req: Request) {
     }
     const curGroups = await db.select({ sortOrder: supportGroups.sortOrder }).from(supportGroups);
     const nextSort = curGroups.reduce((m, x) => Math.max(m, x.sortOrder), 0) + 1;
-    await db.insert(supportGroups).values({
-      code: cleanCode,
-      name: body.newGroup.name.trim(),
-      baseScore: Number(body.newGroup.baseScore) || 5,
-      defaultDurationMonths: body.newGroup.defaultDurationMonths ?? null,
-      isTemporaryDefault: Boolean(body.newGroup.defaultDurationMonths),
-      isPhase2Optional: false,
-      isActive: true,
-      sortOrder: nextSort,
+    const [createdGroup] = await db
+      .insert(supportGroups)
+      .values({
+        code: cleanCode,
+        name: body.newGroup.name.trim(),
+        baseScore: Number(body.newGroup.baseScore) || 5,
+        defaultDurationMonths: body.newGroup.defaultDurationMonths ?? null,
+        isTemporaryDefault: Boolean(body.newGroup.defaultDurationMonths),
+        isPhase2Optional: false,
+        isActive: true,
+        sortOrder: nextSort,
+      })
+      .returning();
+
+    await writeAuditLog({
+      actorId: user.id,
+      actorName: user.fullName,
+      action: "CREATE_SUPPORT_GROUP",
+      entity: "support_groups",
+      entityId: createdGroup.id,
+      newValue: `${createdGroup.code} — ${createdGroup.name} (${createdGroup.baseScore} điểm)`,
+    });
+
+    return NextResponse.json({ ok: true, createdGroup });
+  }
+
+  if (body.newSupportKind?.trim()) {
+    const res = await persistCustomSupportKind(body.newSupportKind);
+    if (res.added) {
+      await writeAuditLog({
+        actorId: user.id,
+        actorName: user.fullName,
+        action: "CREATE_SUPPORT_KIND",
+        entity: "system_settings",
+        entityId: "1",
+        newValue: res.savedLabel,
+      });
+    }
+    return NextResponse.json({
+      ok: true,
+      createdKind: res.savedLabel,
+      customSupportKinds: res.customSupportKinds,
     });
   }
 

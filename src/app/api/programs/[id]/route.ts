@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import {
+  citizenChanges,
   citizenGroups,
   citizens,
   supportAllocations,
   supportGroups,
   supportHistory,
   supportPrograms,
+  systemSettings,
   villages,
 } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   canApprovePrograms,
   canEditCitizens,
@@ -17,7 +19,9 @@ import {
   getCurrentUser,
 } from "@/lib/auth";
 import { runAllocationForProgram } from "@/lib/program-allocator";
+import { classifySupportTier, formatCitizenCode, normalizeVietnameseName } from "@/lib/scoring";
 import { writeAuditLog } from "@/lib/audit";
+import { persistCustomSupportKind } from "@/lib/support-kinds";
 
 export async function GET(
   _req: Request,
@@ -104,6 +108,8 @@ export async function PATCH(
 
   const body = (await req.json()) as {
     action:
+      | "UPDATE_PROGRAM"
+      | "ADD_MANUAL_CITIZEN"
       | "REFRESH_ALLOCATIONS"
       | "SUBMIT_FOR_LOCK"
       | "LOCK"
@@ -113,6 +119,24 @@ export async function PATCH(
       | "PROMOTE_RESERVE"
       | "TOGGLE_ROW_DELIVERY"
       | "MARK_DELIVERED";
+    title?: string;
+    occasionKey?: string;
+    donorName?: string;
+    unitValue?: number;
+    totalSlots?: number;
+    filterGroupIds?: number[];
+    filterVillageIds?: number[];
+    citizenId?: number;
+    newCitizen?: {
+      fullName: string;
+      birthYear: number;
+      gender?: "NAM" | "NU" | "KHAC";
+      villageId: number;
+      hardshipSummary?: string;
+      guardianNote?: string;
+      localBonusScore?: number;
+      groupIds: number[];
+    };
     reason?: string;
     allocationId?: number;
     isDelivered?: boolean;
@@ -121,7 +145,236 @@ export async function PATCH(
     giftDetails?: string;
     valueVnd?: number;
     note?: string;
+    customSupportKind?: string;
   };
+
+  if (body.action === "UPDATE_PROGRAM") {
+    if (program.status === "LOCKED" || program.status === "APPROVED") {
+      return NextResponse.json(
+        { error: "Đợt đã khóa/phê duyệt. Vui lòng 'Mở lại' kỳ trước khi chỉnh sửa tiêu chí." },
+        { status: 400 }
+      );
+    }
+
+    const [s] = await db.select().from(systemSettings).limit(1);
+    const nextTitle = body.title?.trim() || program.title;
+    const nextOccasion = body.occasionKey?.trim().toUpperCase() || program.occasionKey;
+    const nextDonor = body.donorName?.trim() || program.donorName;
+    let nextKind = body.supportKind || program.supportKind;
+    if (nextKind === "OTHER" && body.customSupportKind?.trim()) {
+      const saved = await persistCustomSupportKind(body.customSupportKind);
+      nextKind = saved.savedLabel;
+    }
+    const nextValue =
+      typeof body.unitValue === "number" && body.unitValue >= 0
+        ? body.unitValue
+        : program.unitValue;
+    const nextSlots =
+      typeof body.totalSlots === "number" && body.totalSlots >= 1
+        ? Math.min(5000, body.totalSlots)
+        : program.totalSlots;
+    const nextGroupIds = Array.isArray(body.filterGroupIds)
+      ? body.filterGroupIds
+      : (JSON.parse(program.filterGroupIdsJson || "[]") as number[]);
+    const nextVillageIds = Array.isArray(body.filterVillageIds)
+      ? body.filterVillageIds
+      : (JSON.parse(program.filterVillageIdsJson || "[]") as number[]);
+
+    const nextTier = classifySupportTier(
+      nextValue,
+      s?.smallSupportMax ?? 500000,
+      s?.mediumSupportMax ?? 2000000
+    );
+
+    await db
+      .update(supportPrograms)
+      .set({
+        title: nextTitle,
+        occasionKey: nextOccasion,
+        donorName: nextDonor,
+        supportKind: nextKind,
+        unitValue: nextValue,
+        tier: nextTier,
+        totalSlots: nextSlots,
+        filterGroupIdsJson: JSON.stringify(nextGroupIds),
+        filterVillageIdsJson: JSON.stringify(nextVillageIds),
+        updatedAt: new Date(),
+      })
+      .where(eq(supportPrograms.id, programId));
+
+    await runAllocationForProgram(programId);
+
+    await writeAuditLog({
+      actorId: user.id,
+      actorName: user.fullName,
+      action: "UPDATE_PROGRAM",
+      entity: "support_programs",
+      entityId: programId,
+      newValue: `${nextTitle} (${nextSlots} suất, ${nextGroupIds.length} nhóm, ${nextVillageIds.length} thôn)`,
+    });
+
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "ADD_MANUAL_CITIZEN") {
+    if (program.status === "LOCKED" || program.status === "APPROVED") {
+      return NextResponse.json(
+        { error: "Đợt đã khóa/phê duyệt. Hãy 'Mở lại' trước khi bổ sung đối tượng." },
+        { status: 400 }
+      );
+    }
+
+    let targetCitizenId = body.citizenId ?? 0;
+    const reason =
+      body.reason?.trim() || "Bổ sung trực tiếp trường hợp phát sinh/đặc biệt";
+
+    if (body.newCitizen) {
+      const nc = body.newCitizen;
+      if (!nc.fullName?.trim() || nc.fullName.trim().length < 2) {
+        return NextResponse.json({ error: "Họ tên tối thiểu 2 ký tự" }, { status: 400 });
+      }
+      if (!nc.villageId || !nc.groupIds?.length) {
+        return NextResponse.json(
+          { error: "Vui lòng chọn Thôn và ít nhất 1 Nhóm đối tượng" },
+          { status: 400 }
+        );
+      }
+
+      const [settingsRow, villageRow] = await Promise.all([
+        db.select().from(systemSettings).limit(1),
+        db.select().from(villages).where(eq(villages.id, nc.villageId)).limit(1),
+      ]);
+      const communeCode = settingsRow[0]?.communeCode || "BA";
+      const villageCode = villageRow[0]?.code || "T01";
+      const inVillage = await db
+        .select({ id: citizens.id })
+        .from(citizens)
+        .where(eq(citizens.villageId, nc.villageId));
+      let seq = inVillage.length + 1;
+      let citizenCode = formatCitizenCode(communeCode, villageCode, seq);
+      while (
+        (
+          await db
+            .select({ id: citizens.id })
+            .from(citizens)
+            .where(eq(citizens.citizenCode, citizenCode))
+            .limit(1)
+        ).length > 0
+      ) {
+        seq++;
+        citizenCode = formatCitizenCode(communeCode, villageCode, seq);
+      }
+
+      const [created] = await db
+        .insert(citizens)
+        .values({
+          citizenCode,
+          recordType: "INDIVIDUAL",
+          fullName: nc.fullName.trim(),
+          normalizedName: normalizeVietnameseName(nc.fullName),
+          birthYear: Number(nc.birthYear) || 1970,
+          gender: nc.gender || "KHAC",
+          villageId: nc.villageId,
+          addressDetail: "",
+          guardianNote: nc.guardianNote?.trim() || null,
+          hardshipSummary:
+            nc.hardshipSummary?.trim() || "Trường hợp mới phát sinh đặc biệt",
+          status: "ACTIVE",
+          localBonusScore: Number(nc.localBonusScore) || 0,
+          localBonusReason: reason,
+          createdById: user.id,
+          updatedById: user.id,
+        })
+        .returning();
+
+      await db.insert(citizenGroups).values(
+        nc.groupIds.map((gid) => ({
+          citizenId: created.id,
+          groupId: gid,
+        }))
+      );
+      await db.insert(citizenChanges).values({
+        citizenId: created.id,
+        changeType: "CREATED",
+        summary: `Thêm mới phát sinh trực tiếp vào đợt ${program.programCode}`,
+        actorId: user.id,
+      });
+
+      targetCitizenId = created.id;
+    }
+
+    if (!targetCitizenId) {
+      return NextResponse.json({ error: "Chưa chọn đối tượng để bổ sung" }, { status: 400 });
+    }
+
+    const [existingAlloc] = await db
+      .select()
+      .from(supportAllocations)
+      .where(
+        and(
+          eq(supportAllocations.programId, programId),
+          eq(supportAllocations.citizenId, targetCitizenId)
+        )
+      )
+      .limit(1);
+
+    if (existingAlloc) {
+      await db
+        .update(supportAllocations)
+        .set({
+          allocationType: "PRIMARY",
+          leaderExceptionApproved: true,
+          exceptionReason: reason,
+        })
+        .where(eq(supportAllocations.id, existingAlloc.id));
+    } else {
+      const [cit] = await db
+        .select()
+        .from(citizens)
+        .where(eq(citizens.id, targetCitizenId))
+        .limit(1);
+      if (!cit) {
+        return NextResponse.json({ error: "Không tìm thấy đối tượng" }, { status: 404 });
+      }
+      const [cgLinks, groupRows] = await Promise.all([
+        db
+          .select()
+          .from(citizenGroups)
+          .where(eq(citizenGroups.citizenId, targetCitizenId)),
+        db.select().from(supportGroups),
+      ]);
+      const gMap = new Map(groupRows.map((g) => [g.id, g.baseScore]));
+      const baseScore = cgLinks.reduce((s, cg) => s + (gMap.get(cg.groupId) ?? 0), 0);
+      const bonusScore = cit.localBonusScore || 0;
+
+      await db.insert(supportAllocations).values({
+        programId,
+        citizenId: targetCitizenId,
+        allocationType: "PRIMARY",
+        baseScore,
+        bonusScore,
+        penaltyScore: 0,
+        totalScore: baseScore + bonusScore,
+        receivedCountThisYear: 0,
+        receivedInWindow: false,
+        warningFlag: "NONE",
+        warningMessage: reason,
+        leaderExceptionApproved: true,
+        exceptionReason: reason,
+      });
+    }
+
+    await writeAuditLog({
+      actorId: user.id,
+      actorName: user.fullName,
+      action: "ADD_MANUAL_CITIZEN",
+      entity: "support_programs",
+      entityId: programId,
+      newValue: `Bổ sung đối tượng #${targetCitizenId}: ${reason}`,
+    });
+
+    return NextResponse.json({ ok: true, citizenId: targetCitizenId });
+  }
 
   if (body.action === "REFRESH_ALLOCATIONS") {
     if (program.status === "LOCKED" || program.status === "APPROVED") {
@@ -304,7 +557,11 @@ export async function PATCH(
 
     if (mark) {
       const receivedAt = body.deliveredAt ? new Date(body.deliveredAt) : new Date();
-      const supportKind = body.supportKind || program.supportKind;
+      let supportKind = body.supportKind || program.supportKind;
+      if (supportKind === "OTHER" && body.customSupportKind?.trim()) {
+        const saved = await persistCustomSupportKind(body.customSupportKind);
+        supportKind = saved.savedLabel;
+      }
       const giftDetails = body.giftDetails?.trim() || program.title;
       const valueVnd =
         typeof body.valueVnd === "number" && body.valueVnd >= 0

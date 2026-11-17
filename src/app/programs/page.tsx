@@ -14,6 +14,9 @@ import {
   HardDrive,
   AlertTriangle,
   X,
+  Edit3,
+  UserPlus,
+  Search,
 } from "lucide-react";
 import { PROGRAM_STATUS_LABELS, SUPPORT_TIER_LABELS } from "@/lib/constants";
 
@@ -28,6 +31,8 @@ interface ProgramSummary {
   tier: string;
   totalSlots: number;
   status: string;
+  filterGroupIdsJson?: string;
+  filterVillageIdsJson?: string;
   counts: { primary: number; reserve: number; warnings: number };
 }
 
@@ -69,6 +74,7 @@ interface VillageOption {
   id: number;
   code: string;
   name: string;
+  isActive?: boolean;
 }
 
 export default function ProgramsPage() {
@@ -79,15 +85,19 @@ export default function ProgramsPage() {
   const [allocations, setAllocations] = useState<AllocationRow[]>([]);
   const [groups, setGroups] = useState<SupportGroupOption[]>([]);
   const [villages, setVillages] = useState<VillageOption[]>([]);
+  const [customSupportKinds, setCustomSupportKinds] = useState<string[]>([]);
   const [driveConnected, setDriveConnected] = useState(false);
 
-  // Create modal
+  // Create / Edit modal
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingProgramId, setEditingProgramId] = useState<number | null>(null);
   const [programCode, setProgramCode] = useState("HT-2026-TET-01");
   const [title, setTitle] = useState("");
   const [occasionKey, setOccasionKey] = useState("TET_2026");
   const [donorName, setDonorName] = useState("");
   const [supportKind, setSupportKind] = useState("GIFT");
+  const [customSupportKindText, setCustomSupportKindText] = useState("");
+  const [savingCustomKind, setSavingCustomKind] = useState(false);
   const [unitValue, setUnitValue] = useState(500000);
   const [totalSlots, setTotalSlots] = useState(20);
   const [filterGroupIds, setFilterGroupIds] = useState<number[]>([]);
@@ -96,10 +106,40 @@ export default function ProgramsPage() {
   const [actionMsg, setActionMsg] = useState("");
   const [errMsg, setErrMsg] = useState("");
 
+  // Thêm nhanh tiêu chí nhóm mới trong modal
+  const [newCritName, setNewCritName] = useState("");
+  const [newCritScore, setNewCritScore] = useState(8);
+  const [addingCrit, setAddingCrit] = useState(false);
+
+  // Modal bổ sung người cụ thể / mới phát sinh trực tiếp vào đợt
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [manualTab, setManualTab] = useState<"existing" | "new">("existing");
+  const [searchQ, setSearchQ] = useState("");
+  const [searchResults, setSearchResults] = useState<
+    Array<{
+      id: number;
+      citizenCode: string;
+      fullName: string;
+      birthYear: number;
+      villageName: string;
+      estimatedScore?: number;
+      groups: Array<{ id: number; name: string }>;
+    }>
+  >([]);
+  const [manualReason, setManualReason] = useState("Bổ sung trường hợp mới phát sinh");
+  const [newPersonName, setNewPersonName] = useState("");
+  const [newPersonYear, setNewPersonYear] = useState(1975);
+  const [newPersonVillageId, setNewPersonVillageId] = useState(0);
+  const [newPersonGroupIds, setNewPersonGroupIds] = useState<number[]>([]);
+  const [newPersonHardship, setNewPersonHardship] = useState("");
+  const [newPersonBonus, setNewPersonBonus] = useState(2);
+  const [savingManual, setSavingManual] = useState(false);
+
   // Modal ghi nhận phát quà từng dòng khi tick checkbox
   const [deliveryModalRow, setDeliveryModalRow] = useState<AllocationRow | null>(null);
   const [delDate, setDelDate] = useState("");
   const [delKind, setDelKind] = useState("GIFT");
+  const [delCustomKindText, setDelCustomKindText] = useState("");
   const [delGiftDetails, setDelGiftDetails] = useState("");
   const [delValueVnd, setDelValueVnd] = useState(500000);
   const [delNote, setDelNote] = useState("");
@@ -136,7 +176,12 @@ export default function ProgramsPage() {
       .then((d) => {
         if (!d) return;
         setGroups((d.supportGroups || []).filter((g: SupportGroupOption) => g.isActive));
-        setVillages(d.villages || []);
+        const activeVillages = (d.villages || []).filter(
+          (v: VillageOption) => v.isActive !== false
+        );
+        setVillages(activeVillages);
+        if (activeVillages[0]) setNewPersonVillageId(activeVillages[0].id);
+        setCustomSupportKinds(d.customSupportKinds || []);
         setDriveConnected(Boolean(d.settings?.driveConnected));
       });
   }, [loadPrograms]);
@@ -145,37 +190,252 @@ export default function ProgramsPage() {
     if (selectedId) loadDetail(selectedId);
   }, [selectedId, loadDetail]);
 
-  async function handleCreateProgram(e: React.FormEvent) {
+  function openCreateProgramModal() {
+    setEditingProgramId(null);
+    setProgramCode(`HT-${new Date().getFullYear()}-${String(programs.length + 1).padStart(2, "0")}`);
+    setTitle("");
+    setOccasionKey("TET_2026");
+    setDonorName("");
+    setSupportKind("GIFT");
+    setCustomSupportKindText("");
+    setUnitValue(500000);
+    setTotalSlots(20);
+    setFilterGroupIds([]);
+    setFilterVillageIds([]);
+    setErrMsg("");
+    setModalOpen(true);
+  }
+
+  function openEditProgramModal(p: ProgramSummary) {
+    setEditingProgramId(p.id);
+    setProgramCode(p.programCode);
+    setTitle(p.title);
+    setOccasionKey(p.occasionKey);
+    setDonorName(p.donorName);
+    setSupportKind(p.supportKind);
+    setCustomSupportKindText("");
+    setUnitValue(p.unitValue);
+    setTotalSlots(p.totalSlots);
+    try {
+      setFilterGroupIds(JSON.parse(p.filterGroupIdsJson || "[]"));
+    } catch {
+      setFilterGroupIds([]);
+    }
+    try {
+      setFilterVillageIds(JSON.parse(p.filterVillageIdsJson || "[]"));
+    } catch {
+      setFilterVillageIds([]);
+    }
+    setErrMsg("");
+    setModalOpen(true);
+  }
+
+  async function handleSaveProgram(e: React.FormEvent) {
     e.preventDefault();
     setErrMsg("");
     setCreating(true);
     try {
-      const res = await fetch("/api/programs", {
-        method: "POST",
+      const res = editingProgramId
+        ? await fetch(`/api/programs/${editingProgramId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "UPDATE_PROGRAM",
+              title,
+              occasionKey,
+              donorName,
+              supportKind,
+              customSupportKind:
+                supportKind === "OTHER" ? customSupportKindText : undefined,
+              unitValue: Number(unitValue),
+              totalSlots: Number(totalSlots),
+              filterGroupIds,
+              filterVillageIds,
+            }),
+          })
+        : await fetch("/api/programs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              programCode,
+              title,
+              occasionKey,
+              donorName,
+              supportKind,
+              customSupportKind:
+                supportKind === "OTHER" ? customSupportKindText : undefined,
+              unitValue: Number(unitValue),
+              totalSlots: Number(totalSlots),
+              filterGroupIds,
+              filterVillageIds,
+            }),
+          });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrMsg(data.error || "Lưu đợt hỗ trợ thất bại");
+      } else {
+        const targetId = editingProgramId ?? data.program.id;
+        if (supportKind === "OTHER" && customSupportKindText.trim()) {
+          const clean = customSupportKindText.trim();
+          setCustomSupportKinds((prev) =>
+            prev.some((k) => k.toLowerCase() === clean.toLowerCase())
+              ? prev
+              : [...prev, clean]
+          );
+          setCustomSupportKindText("");
+        }
+        setModalOpen(false);
+        setSelectedId(targetId);
+        setActionMsg(
+          editingProgramId
+            ? "Đã cập nhật tiêu chí đợt hỗ trợ và lọc lại danh sách."
+            : "Đã tạo đợt hỗ trợ mới và lọc danh sách ưu tiên."
+        );
+        loadPrograms();
+        loadDetail(targetId);
+      }
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleSaveCustomSupportKind(
+    label: string,
+    applyTarget: "program" | "delivery"
+  ) {
+    const clean = label.trim();
+    if (!clean) return;
+    setSavingCustomKind(true);
+    setErrMsg("");
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newSupportKind: clean }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrMsg(data.error || "Không lưu được hình thức mới");
+      } else {
+        setCustomSupportKinds(data.customSupportKinds || []);
+        if (applyTarget === "program") {
+          setSupportKind(data.createdKind || clean);
+          setCustomSupportKindText("");
+        } else {
+          setDelKind(data.createdKind || clean);
+          setDelCustomKindText("");
+        }
+      }
+    } finally {
+      setSavingCustomKind(false);
+    }
+  }
+
+  async function handleQuickAddCriterion() {
+    if (!newCritName.trim()) {
+      setErrMsg("Vui lòng nhập tên nhóm/trường hợp phát sinh mới.");
+      return;
+    }
+    setErrMsg("");
+    setAddingCrit(true);
+    try {
+      const code = `PS_${Date.now().toString(36).toUpperCase()}`;
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          programCode,
-          title,
-          occasionKey,
-          donorName,
-          supportKind,
-          unitValue: Number(unitValue),
-          totalSlots: Number(totalSlots),
-          filterGroupIds,
-          filterVillageIds,
+          newGroup: {
+            code,
+            name: newCritName.trim(),
+            baseScore: Number(newCritScore) || 8,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.createdGroup) {
+        setErrMsg(data.error || "Không thêm được tiêu chí mới");
+      } else {
+        const created: SupportGroupOption = data.createdGroup;
+        setGroups((prev) => [...prev, created]);
+        setFilterGroupIds((prev) => [...prev, created.id]);
+        setNewCritName("");
+      }
+    } finally {
+      setAddingCrit(false);
+    }
+  }
+
+  async function handleSearchExisting(query: string) {
+    setSearchQ(query);
+    const params = new URLSearchParams({ q: query, page: "1", pageSize: "15" });
+    const res = await fetch(`/api/citizens?${params.toString()}`);
+    if (res.ok) {
+      const d = await res.json();
+      setSearchResults(d.citizens || []);
+    }
+  }
+
+  async function handleAddExistingToProgram(citizenId: number) {
+    if (!selectedId) return;
+    setSavingManual(true);
+    try {
+      const res = await fetch(`/api/programs/${selectedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "ADD_MANUAL_CITIZEN",
+          citizenId,
+          reason: manualReason,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setErrMsg(data.error || "Tạo đợt hỗ trợ thất bại");
+        setActionMsg(data.error || "Không thể bổ sung đối tượng");
       } else {
-        setModalOpen(false);
-        setSelectedId(data.program.id);
+        setManualModalOpen(false);
+        setActionMsg("Đã bổ sung đối tượng vào Danh sách chính thức của đợt.");
         loadPrograms();
-        loadDetail(data.program.id);
+        loadDetail(selectedId);
       }
     } finally {
-      setCreating(false);
+      setSavingManual(false);
+    }
+  }
+
+  async function handleCreateEmergingCitizenAndAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedId) return;
+    setSavingManual(true);
+    try {
+      const res = await fetch(`/api/programs/${selectedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "ADD_MANUAL_CITIZEN",
+          reason: manualReason || newPersonHardship,
+          newCitizen: {
+            fullName: newPersonName,
+            birthYear: Number(newPersonYear),
+            villageId: Number(newPersonVillageId),
+            groupIds: newPersonGroupIds,
+            hardshipSummary: newPersonHardship,
+            localBonusScore: Number(newPersonBonus) || 0,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setActionMsg(data.error || "Không thể tạo & bổ sung đối tượng");
+      } else {
+        setManualModalOpen(false);
+        setNewPersonName("");
+        setNewPersonHardship("");
+        setActionMsg("Đã tạo hồ sơ phát sinh mới và đưa vào Danh sách chính thức của đợt.");
+        loadPrograms();
+        loadDetail(selectedId);
+      }
+    } finally {
+      setSavingManual(false);
     }
   }
 
@@ -245,10 +505,7 @@ export default function ProgramsPage() {
           </div>
           {user?.role !== "AUDITOR" && user?.role !== "VILLAGE_HEAD" && (
             <button
-              onClick={() => {
-                setErrMsg("");
-                setModalOpen(true);
-              }}
+              onClick={openCreateProgramModal}
               className="flex items-center gap-1.5 rounded-lg bg-blue-800 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-900"
             >
               <Plus className="h-4 w-4" />
@@ -335,25 +592,63 @@ export default function ProgramsPage() {
                       </b>{" "}
                       • Tài trợ: {detailProgram.donorName}
                     </p>
+                    {(() => {
+                      let gIds: number[] = [];
+                      let vIds: number[] = [];
+                      try {
+                        gIds = JSON.parse(detailProgram.filterGroupIdsJson || "[]");
+                      } catch {}
+                      try {
+                        vIds = JSON.parse(detailProgram.filterVillageIdsJson || "[]");
+                      } catch {}
+                      const gNames = groups
+                        .filter((g) => gIds.includes(g.id))
+                        .map((g) => g.name);
+                      const vNames = villages
+                        .filter((v) => vIds.includes(v.id))
+                        .map((v) => `${v.code} (${v.name})`);
+                      return (
+                        <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] text-slate-600">
+                          <span className="rounded bg-slate-100 px-2 py-0.5">
+                            <b>Nhóm lọc:</b>{" "}
+                            {gNames.length > 0 ? gNames.join(", ") : "Tất cả nhóm"}
+                          </span>
+                          <span className="rounded bg-slate-100 px-2 py-0.5">
+                            <b>Thôn:</b>{" "}
+                            {vNames.length > 0 ? vNames.join(", ") : "Toàn xã"}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Workflow Actions */}
                   <div className="flex flex-wrap items-start gap-2">
-                    {(detailProgram.status === "DRAFT" ||
-                      detailProgram.status === "REOPENED") && (
+                    {user?.role !== "AUDITOR" &&
+                      (detailProgram.status === "DRAFT" ||
+                        detailProgram.status === "PENDING_APPROVAL" ||
+                        detailProgram.status === "REOPENED") && (
                       <>
+                        <button
+                          onClick={() => openEditProgramModal(detailProgram)}
+                          className="flex items-center gap-1 rounded-lg border border-blue-300 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-900 hover:bg-blue-100"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" /> Chỉnh sửa đợt &amp; Tiêu chí
+                        </button>
                         <button
                           onClick={() => runProgramAction("REFRESH_ALLOCATIONS")}
                           className="flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                         >
                           <RefreshCw className="h-3.5 w-3.5" /> Lọc lại
                         </button>
-                        <button
-                          onClick={() => runProgramAction("SUBMIT_FOR_LOCK")}
-                          className="rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white"
-                        >
-                          Trình khóa kỳ
-                        </button>
+                        {detailProgram.status !== "PENDING_APPROVAL" && (
+                          <button
+                            onClick={() => runProgramAction("SUBMIT_FOR_LOCK")}
+                            className="rounded-lg bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Trình khóa kỳ
+                          </button>
+                        )}
                       </>
                     )}
 
@@ -444,10 +739,44 @@ export default function ProgramsPage() {
 
                 {/* Primary Allocations */}
                 <div>
-                  <h3 className="mb-2 text-xs font-bold uppercase text-slate-700">
-                    1. Danh sách chính thức ({primaries.length}/
-                    {detailProgram.totalSlots} suất)
-                  </h3>
+                  <div className="mb-2 flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+                    <h3 className="text-xs font-bold uppercase text-slate-700">
+                      1. Danh sách chính thức ({primaries.length}/
+                      {detailProgram.totalSlots} suất)
+                    </h3>
+                    {user?.role !== "AUDITOR" &&
+                      (detailProgram.status === "DRAFT" ||
+                        detailProgram.status === "PENDING_APPROVAL" ||
+                        detailProgram.status === "REOPENED") && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              setNewPersonGroupIds(
+                                JSON.parse(detailProgram.filterGroupIdsJson || "[]")
+                              );
+                            } catch {
+                              setNewPersonGroupIds([]);
+                            }
+                            setManualTab("existing");
+                            setManualModalOpen(true);
+                            handleSearchExisting("");
+                          }}
+                          className="flex items-center gap-1 self-start rounded-lg border border-emerald-600 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          <span>+ Thêm trường hợp phát sinh / bổ sung vào đợt</span>
+                        </button>
+                      )}
+                  </div>
+                  {primaries.length < detailProgram.totalSlots &&
+                    (detailProgram.status === "DRAFT" ||
+                      detailProgram.status === "PENDING_APPROVAL" ||
+                      detailProgram.status === "REOPENED") && (
+                      <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                        Đang lọc được <b>{primaries.length}/{detailProgram.totalSlots}</b> suất theo tiêu chí hiện tại. Bạn có thể bấm <b>&ldquo;Chỉnh sửa đợt &amp; Tiêu chí&rdquo;</b> để tích chọn thêm nhóm/thôn khác, hoặc bấm <b>&ldquo;+ Thêm trường hợp phát sinh / bổ sung vào đợt&rdquo;</b>.
+                      </div>
+                    )}
                   <div className="overflow-x-auto rounded-lg border border-slate-200">
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-600">
@@ -659,13 +988,15 @@ export default function ProgramsPage() {
           <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3">
               <h2 className="text-base font-bold text-slate-900">
-                Tạo Đợt hỗ trợ &amp; Lọc danh sách tự động
+                {editingProgramId
+                  ? "Chỉnh sửa Đợt hỗ trợ & Tiêu chí lọc"
+                  : "Tạo Đợt hỗ trợ & Lọc danh sách tự động"}
               </h2>
               <button onClick={() => setModalOpen(false)}>
                 <X className="h-5 w-5 text-slate-500" />
               </button>
             </div>
-            <form onSubmit={handleCreateProgram} className="space-y-3 text-xs">
+            <form onSubmit={handleSaveProgram} className="space-y-3 text-xs">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="mb-1 block font-semibold text-slate-700">
@@ -674,10 +1005,11 @@ export default function ProgramsPage() {
                   <input
                     type="text"
                     required
+                    disabled={Boolean(editingProgramId)}
                     value={programCode}
                     onChange={(e) => setProgramCode(e.target.value.toUpperCase())}
                     placeholder="HT-2026-TET-01"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100"
                   />
                 </div>
                 <div>
@@ -735,8 +1067,34 @@ export default function ProgramsPage() {
                     <option value="GIFT">Quà / Hiện vật</option>
                     <option value="CASH">Tiền mặt</option>
                     <option value="SCHOLARSHIP">Học bổng</option>
-                    <option value="OTHER">Khác</option>
+                    {customSupportKinds.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                    <option value="OTHER">Khác (nhập thêm mới...)</option>
                   </select>
+                  {supportKind === "OTHER" && (
+                    <div className="mt-2 flex gap-1.5 rounded-lg border border-dashed border-blue-300 bg-blue-50/60 p-2">
+                      <input
+                        type="text"
+                        value={customSupportKindText}
+                        onChange={(e) => setCustomSupportKindText(e.target.value)}
+                        placeholder="Nhập hình thức mới (vd: Thẻ BHYT, Xe đạp)..."
+                        className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs"
+                      />
+                      <button
+                        type="button"
+                        disabled={savingCustomKind || !customSupportKindText.trim()}
+                        onClick={() =>
+                          handleSaveCustomSupportKind(customSupportKindText, "program")
+                        }
+                        className="shrink-0 rounded bg-blue-700 px-2.5 py-1 font-semibold text-white hover:bg-blue-800 disabled:opacity-50"
+                      >
+                        {savingCustomKind ? "Đang lưu..." : "Lưu vào hệ thống"}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -792,13 +1150,39 @@ export default function ProgramsPage() {
                     </label>
                   ))}
                 </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-blue-200 bg-blue-50/60 p-2">
+                  <input
+                    type="text"
+                    value={newCritName}
+                    onChange={(e) => setNewCritName(e.target.value)}
+                    placeholder="+ Thêm tiêu chí/nhóm mới phát sinh (vd: Hộ khó khăn đột xuất)..."
+                    className="min-w-48 flex-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={newCritScore}
+                    onChange={(e) => setNewCritScore(Number(e.target.value))}
+                    title="Điểm ưu tiên của nhóm mới"
+                    className="w-16 rounded border border-slate-300 bg-white px-2 py-1.5 text-center font-bold"
+                  />
+                  <button
+                    type="button"
+                    disabled={addingCrit}
+                    onClick={handleQuickAddCriterion}
+                    className="rounded-lg bg-blue-700 px-3 py-1.5 font-semibold text-white hover:bg-blue-800 disabled:opacity-50"
+                  >
+                    {addingCrit ? "Đang thêm..." : "+ Thêm tiêu chí"}
+                  </button>
+                </div>
               </div>
 
               <div>
                 <label className="mb-1 block font-semibold text-slate-700">
                   Phạm vi thôn (để trống = toàn xã)
                 </label>
-                <div className="grid max-h-24 grid-cols-3 gap-1 overflow-y-auto rounded-lg border border-slate-200 p-2 sm:grid-cols-4">
+                <div className="grid max-h-36 grid-cols-2 gap-1.5 overflow-y-auto rounded-lg border border-slate-200 p-2.5 sm:grid-cols-3">
                   {villages.map((v) => (
                     <label key={v.id} className="flex items-center gap-1.5">
                       <input
@@ -812,7 +1196,9 @@ export default function ProgramsPage() {
                           )
                         }
                       />
-                      <span>{v.code}</span>
+                      <span>
+                        <strong className="font-mono text-blue-900">{v.code}</strong> — {v.name}
+                      </span>
                     </label>
                   ))}
                 </div>
@@ -837,7 +1223,11 @@ export default function ProgramsPage() {
                   disabled={creating}
                   className="rounded-lg bg-blue-800 px-4 py-2 font-semibold text-white hover:bg-blue-900"
                 >
-                  {creating ? "Đang lọc..." : "Tạo & Lọc danh sách"}
+                  {creating
+                    ? "Đang lọc..."
+                    : editingProgramId
+                      ? "Lưu thay đổi & Lọc lại"
+                      : "Tạo & Lọc danh sách"}
                 </button>
               </div>
             </form>
@@ -874,10 +1264,21 @@ export default function ProgramsPage() {
                     isDelivered: true,
                     deliveredAt: delDate,
                     supportKind: delKind,
+                    customSupportKind:
+                      delKind === "OTHER" ? delCustomKindText : undefined,
                     giftDetails: delGiftDetails,
                     valueVnd: Number(delValueVnd),
                     note: delNote,
                   });
+                  if (delKind === "OTHER" && delCustomKindText.trim()) {
+                    const clean = delCustomKindText.trim();
+                    setCustomSupportKinds((prev) =>
+                      prev.some((k) => k.toLowerCase() === clean.toLowerCase())
+                        ? prev
+                        : [...prev, clean]
+                    );
+                    setDelCustomKindText("");
+                  }
                   setDeliveryModalRow(null);
                 } finally {
                   setDelSaving(false);
@@ -919,8 +1320,34 @@ export default function ProgramsPage() {
                     <option value="GIFT">Quà / Hiện vật</option>
                     <option value="CASH">Tiền mặt</option>
                     <option value="SCHOLARSHIP">Học bổng</option>
-                    <option value="OTHER">Khác</option>
+                    {customSupportKinds.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                    <option value="OTHER">Khác (nhập thêm mới...)</option>
                   </select>
+                  {delKind === "OTHER" && (
+                    <div className="mt-1.5 flex gap-1">
+                      <input
+                        type="text"
+                        value={delCustomKindText}
+                        onChange={(e) => setDelCustomKindText(e.target.value)}
+                        placeholder="Nhập loại mới..."
+                        className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                      />
+                      <button
+                        type="button"
+                        disabled={savingCustomKind || !delCustomKindText.trim()}
+                        onClick={() =>
+                          handleSaveCustomSupportKind(delCustomKindText, "delivery")
+                        }
+                        className="shrink-0 rounded bg-blue-700 px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                      >
+                        Lưu
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1003,6 +1430,228 @@ export default function ProgramsPage() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal bổ sung người cụ thể / mới phát sinh trực tiếp vào đợt */}
+      {manualModalOpen && detailProgram && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl text-xs">
+            <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Bổ sung đối tượng / Trường hợp phát sinh vào đợt
+                </h2>
+                <p className="text-slate-500">
+                  {detailProgram.programCode} — {detailProgram.title}
+                </p>
+              </div>
+              <button onClick={() => setManualModalOpen(false)}>
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="mb-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setManualTab("existing")}
+                className={`rounded-lg px-3 py-2 font-semibold ${
+                  manualTab === "existing"
+                    ? "bg-blue-800 text-white"
+                    : "border border-slate-300 text-slate-700"
+                }`}
+              >
+                Chọn người đã có trong hệ thống
+              </button>
+              <button
+                type="button"
+                onClick={() => setManualTab("new")}
+                className={`rounded-lg px-3 py-2 font-semibold ${
+                  manualTab === "new"
+                    ? "bg-blue-800 text-white"
+                    : "border border-slate-300 text-slate-700"
+                }`}
+              >
+                + Nhập trường hợp MỚI phát sinh
+              </button>
+            </div>
+
+            <div className="mb-3">
+              <label className="mb-1 block font-semibold text-slate-700">
+                Lý do bổ sung vào đợt
+              </label>
+              <input
+                type="text"
+                value={manualReason}
+                onChange={(e) => setManualReason(e.target.value)}
+                placeholder="vd: Hộ mới phát sinh khó khăn đột xuất"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            </div>
+
+            {manualTab === "existing" ? (
+              <div className="space-y-3">
+                <div className="relative">
+                  <Search className="absolute top-2.5 left-3 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={searchQ}
+                    onChange={(e) => handleSearchExisting(e.target.value)}
+                    placeholder="Gõ tên hoặc mã công dân cần thêm vào đợt..."
+                    className="w-full rounded-lg border border-slate-300 py-2 pr-3 pl-9"
+                  />
+                </div>
+                <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+                  {searchResults.length === 0 ? (
+                    <div className="p-4 text-center text-slate-500">
+                      Không tìm thấy đối tượng phù hợp.
+                    </div>
+                  ) : (
+                    searchResults.map((c) => {
+                      const alreadyIn = allocations.some(
+                        (a) =>
+                          a.citizenId === c.id &&
+                          (a.allocationType === "PRIMARY" || a.leaderExceptionApproved)
+                      );
+                      return (
+                        <div
+                          key={c.id}
+                          className="flex items-center justify-between gap-2 p-2.5 hover:bg-slate-50"
+                        >
+                          <div>
+                            <div className="font-semibold text-slate-900">
+                              {c.fullName} ({c.birthYear}) — {c.villageName}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              {c.citizenCode} • {c.groups.map((g) => g.name).join(", ")} •{" "}
+                              <b>{c.estimatedScore ?? 0} điểm</b>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={alreadyIn || savingManual}
+                            onClick={() => handleAddExistingToProgram(c.id)}
+                            className="shrink-0 rounded-lg bg-emerald-700 px-3 py-1.5 font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-200 disabled:text-slate-500"
+                          >
+                            {alreadyIn ? "Đã có trong đợt" : "+ Thêm vào đợt"}
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleCreateEmergingCitizenAndAdd} className="space-y-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block font-semibold">Họ và tên (*)</label>
+                    <input
+                      type="text"
+                      required
+                      value={newPersonName}
+                      onChange={(e) => setNewPersonName(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block font-semibold">Năm sinh (*)</label>
+                    <input
+                      type="number"
+                      required
+                      min={1900}
+                      max={new Date().getFullYear()}
+                      value={newPersonYear}
+                      onChange={(e) => setNewPersonYear(Number(e.target.value))}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block font-semibold">Thôn (*)</label>
+                    <select
+                      value={newPersonVillageId}
+                      onChange={(e) => setNewPersonVillageId(Number(e.target.value))}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    >
+                      {villages.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.code} — {v.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block font-semibold">Điểm cộng thêm</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={50}
+                      value={newPersonBonus}
+                      onChange={(e) => setNewPersonBonus(Number(e.target.value))}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block font-semibold">
+                    Nhóm đối tượng (* chọn ít nhất 1)
+                  </label>
+                  <div className="grid max-h-32 grid-cols-1 gap-1 overflow-y-auto rounded-lg border border-slate-200 p-2 sm:grid-cols-2">
+                    {groups.map((g) => (
+                      <label key={g.id} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={newPersonGroupIds.includes(g.id)}
+                          onChange={(e) =>
+                            setNewPersonGroupIds(
+                              e.target.checked
+                                ? [...newPersonGroupIds, g.id]
+                                : newPersonGroupIds.filter((id) => id !== g.id)
+                            )
+                          }
+                        />
+                        <span>{g.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block font-semibold">
+                    Hoàn cảnh cụ thể / ghi chú phát sinh
+                  </label>
+                  <input
+                    type="text"
+                    value={newPersonHardship}
+                    onChange={(e) => setNewPersonHardship(e.target.value)}
+                    placeholder="vd: Hộ mới phát sinh do bệnh đột xuất / thiệt hại bão"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setManualModalOpen(false)}
+                    className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700"
+                  >
+                    Đóng
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingManual || newPersonGroupIds.length === 0}
+                    className="rounded-lg bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                  >
+                    {savingManual ? "Đang lưu..." : "Lưu hồ sơ & Đưa vào đợt"}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
